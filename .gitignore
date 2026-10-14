@@ -1,0 +1,16 @@
+.build/
+dist/
+backups/
+designs/
+*.log
+*.app/
+*.bundle/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+Assets/AppIcon.iconset/
