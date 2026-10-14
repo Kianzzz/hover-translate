@@ -52,10 +52,20 @@ struct CoreChecks {
         expect(SelectionEdit(value: "A A", selected: "A", range: NSRange(location: 2, length: 1)).replacing(with: "B") == "A B", "重复文本按原选区定位")
         expect(SelectionEdit(value: "已改变", selected: selected, range: range).replacing(with: "English") == nil, "内容或选区变化时拒绝替换")
         expect(SelectionEdit(value: draft, selected: "", range: NSRange(location: 0, length: 0)).replacing(with: "English") == nil, "空选区不能插入译文")
-        print("28 core checks passed.")
+        let line = CGRect(x: 100, y: 300, width: 500, height: 22)
+        let origin = CGPoint(x: 300, y: 311)
+        let nearby = TextLogic.badgeFrame(pointer: origin, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: line)
+        expect(!nearby.intersects(line), "图标不遮挡已知文字边界")
+        expect(TextLogic.distance(origin, to: nearby) <= 18, "长句中间悬停时图标就在附近")
+        expect(TextLogic.movingTowardBadge(from: origin, to: CGPoint(x: 303, y: 304), badge: nearby), "斜向接近图标保持可达")
+        expect(!TextLogic.movingTowardBadge(from: origin, to: CGPoint(x: 303, y: 322), badge: nearby), "反向离开不保留图标")
+        expect(!TextLogic.movingTowardBadge(from: origin, to: origin, badge: nearby), "静止不能无限延续接近状态")
+        let huge = TextLogic.badgeFrame(pointer: origin, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: CGRect(x: 0, y: 0, width: 1000, height: 800))
+        expect(TextLogic.distance(origin, to: huge) < 10, "容器级边界不能把图标推远")
+        print("34 core checks passed.")
     }
     static func expect(_ condition: @autoclosure () -> Bool, _ name: String) {
-        guard condition() else { fatalError("FAILED: \(name)") }
+        DiagnosticCheck.require(condition(), name)
         print("PASS: \(name)")
     }
 }

@@ -6,6 +6,9 @@ final class HoverMonitor {
         let capture: CapturedText
         let sourceRect: CGRect
         let badgeRect: CGRect
+        let origin: CGPoint
+        var previousPoint: CGPoint
+        var approachUntil = Date.distantPast
         let demo: Bool
         var opened = false
         var enteredCard = false
@@ -13,7 +16,7 @@ final class HoverMonitor {
 
     let model: AppModel
     var visibleCardFrame: (() -> CGRect?)?
-    var showBadge: ((CGPoint) -> CGRect)?
+    var showBadge: ((CGPoint, CGRect) -> CGRect)?
     var hideBadge: (() -> Void)?
     private var candidate: Candidate?
     private var outsideSince: Date?
@@ -74,8 +77,8 @@ final class HoverMonitor {
     }
 
     func stage(_ capture: CapturedText, sourceRect: CGRect, pointer: CGPoint, demo: Bool = false) {
-        guard !model.pinned, let badgeRect = showBadge?(pointer) else { return }
-        candidate = Candidate(capture: capture, sourceRect: sourceRect, badgeRect: badgeRect, demo: demo)
+        guard !model.pinned, let badgeRect = showBadge?(pointer, sourceRect) else { return }
+        candidate = Candidate(capture: capture, sourceRect: sourceRect, badgeRect: badgeRect, origin: pointer, previousPoint: pointer, demo: demo)
         outsideSince = nil
         model.status = "已发现英文 · 将鼠标移到“译”图标查看译文"
     }
@@ -112,8 +115,17 @@ final class HoverMonitor {
             }
             return true
         }
-        let inSource = !current.opened && current.sourceRect.insetBy(dx: -7, dy: -7).contains(point)
-        let towardBadge = !current.opened && TextLogic.hoverTransitContains(point, from: current.sourceRect, to: current.badgeRect)
+        let movement = hypot(point.x - current.previousPoint.x, point.y - current.previousPoint.y)
+        let toward = TextLogic.movingTowardBadge(from: current.previousPoint, to: point, badge: current.badgeRect)
+        if movement >= 0.5 {
+            current.previousPoint = point
+            current.approachUntil = toward ? now.addingTimeInterval(0.2) : .distantPast
+        }
+        candidate = current
+        // The source may be an entire paragraph. Only the initial hover point
+        // remains a resting zone; moving elsewhere in that paragraph dismisses.
+        let inSource = !current.opened && hypot(point.x - current.origin.x, point.y - current.origin.y) <= 4
+        let towardBadge = !current.opened && (toward || now < current.approachUntil)
         let towardCard: Bool
         if current.opened, !current.enteredCard, let frame = visibleCardFrame?() {
             towardCard = TextLogic.hoverTransitContains(point, from: current.badgeRect, to: frame)

@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let panel = self?.panel, panel.isVisible else { return nil }
             return panel.frame
         }
-        monitor.showBadge = { [weak self] point in self?.showBadge(point) ?? .zero }
+        monitor.showBadge = { [weak self] point, source in self?.showBadge(point, source: source) ?? .zero }
         monitor.hideBadge = { [weak self] in self?.badge.orderOut(nil) }
         monitor.start()
         model.showCard = { [weak self] anchor in self?.showCard(anchor) }
@@ -76,14 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                 ("Good design makes complex things feel simple.", "好的设计，让复杂的事情变得简单。"),
                                 (String(repeating: "English text. ", count: 40), String(repeating: "较长的译文。", count: 100))]
                 for cycle in 0..<cycles {
-                    precondition(Thread.isMainThread)
+                    DiagnosticCheck.require(Thread.isMainThread)
                     if checkSelfHit {
                         let point = TextLogic.quartzPoint(CGPoint(x: self.window.frame.midX, y: self.window.frame.midY), desktopTop: self.monitor.desktopTop)
                         do {
                             _ = try await TextCapture.accessible(at: point, word: false)
-                            preconditionFailure("The application's own window must be rejected")
+                            DiagnosticCheck.fail("The application's own window must be rejected")
                         } catch CaptureError.ownApplication { }
-                        catch { preconditionFailure("Unexpected self-hit error: \(error)") }
+                        catch { DiagnosticCheck.fail("Unexpected self-hit error: \(error)") }
                         // Exercise the final notification path seen in the crash report,
                         // without changing the computer's actual power settings.
                         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -105,10 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.model.phase = .result
                     _ = self.showBadge(CGPoint(x: 400, y: 430))
                     try? await Task.sleep(nanoseconds: 80_000_000)
-                    precondition(self.panel.frame.width == self.model.cardWidth)
-                    precondition(self.panel.frame.height == self.model.cardHeight)
-                    precondition(self.panel.frame.height <= 158)
-                    precondition(self.panel.contentView is NSVisualEffectView)
+                    DiagnosticCheck.require(self.panel.frame.width == self.model.cardWidth)
+                    DiagnosticCheck.require(self.panel.frame.height == self.model.cardHeight)
+                    DiagnosticCheck.require(self.panel.frame.height <= 158)
+                    DiagnosticCheck.require(self.panel.contentView is NSVisualEffectView)
                     self.model.dismiss(force: true)
                     self.window.performClose(nil)
                     try? await Task.sleep(nanoseconds: 80_000_000)
@@ -192,9 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return container
     }
 
-    func showBadge(_ point: CGPoint) -> CGRect {
+    func showBadge(_ point: CGPoint, source: CGRect = .zero) -> CGRect {
         let screen = NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main!
-        let rect = TextLogic.badgeFrame(pointer: point, visible: screen.visibleFrame)
+        let rect = TextLogic.badgeFrame(pointer: point, visible: screen.visibleFrame, source: source)
         badge.setFrame(rect, display: true)
         badge.orderFrontRegardless()
         return badge.frame
@@ -315,98 +315,113 @@ struct Entry {
                 let model = AppModel(checkPermissions: false)
                 do {
                     try TextCapture.requireExternalElement(AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier))
-                    preconditionFailure("Own accessibility elements must never enter the background reader")
+                    DiagnosticCheck.fail("Own accessibility elements must never enter the background reader")
                 } catch CaptureError.ownApplication { }
-                catch { preconditionFailure("Unexpected own-element guard error") }
-                try! TextCapture.requireExternalElement(AXUIElementCreateApplication(1))
+                catch { DiagnosticCheck.fail("Unexpected own-element guard error") }
+                do { try TextCapture.requireExternalElement(AXUIElementCreateApplication(1)) }
+                catch { DiagnosticCheck.fail("External element guard failed: \(error)") }
                 do {
                     _ = try await TextCapture.selected(pid: ProcessInfo.processInfo.processIdentifier, fallbackPoint: .zero)
-                    preconditionFailure("Own selection must not enter the background reader")
+                    DiagnosticCheck.fail("Own selection must not enter the background reader")
                 } catch CaptureError.ownApplication { }
-                catch { preconditionFailure("Unexpected own-selection guard error") }
+                catch { DiagnosticCheck.fail("Unexpected own-selection guard error") }
                 var updates = 0
                 let subscription = model.objectWillChange.sink { updates += 1 }
                 model.applyPermissions(accessibility: false, screen: false)
-                precondition(updates == 0, "Unchanged permissions must not invalidate SwiftUI layout")
+                DiagnosticCheck.require(updates == 0, "Unchanged permissions must not invalidate SwiftUI layout")
                 model.applyPermissions(accessibility: true, screen: true)
-                precondition(updates == 2, "Permission changes must publish immediately")
+                DiagnosticCheck.require(updates == 2, "Permission changes must publish immediately")
                 model.applyPermissions(accessibility: true, screen: true)
-                precondition(updates == 2, "Repeated polling must not publish")
+                DiagnosticCheck.require(updates == 2, "Repeated polling must not publish")
                 subscription.cancel()
                 let monitor = HoverMonitor(model: model)
                 let pointer = CGPoint(x: 150, y: 310)
                 let source = CGRect(x: 100, y: 300, width: 300, height: 25)
                 let badge = TextLogic.badgeFrame(pointer: pointer, visible: CGRect(x: 0, y: 0, width: 1100, height: 780))
+                // Exercise approach/reversal with immediate dismissal selected.
+                let travel = HoverMonitor(model: model)
+                travel.showBadge = { _, _ in badge }
+                model.clearHover = { [weak travel] in travel?.clearCandidate() }
+                model.closeDelay = 0
+                let travelTime = Date(timeIntervalSince1970: 900)
+                travel.stage(CapturedText(text: "Test", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
+                let approaching = CGPoint(x: pointer.x + 4, y: pointer.y - 4)
+                DiagnosticCheck.require(travel.retainCandidate(at: approaching, now: travelTime), "Approaching survives zero close delay")
+                DiagnosticCheck.require(travel.retainCandidate(at: approaching, now: travelTime.addingTimeInterval(0.1)), "Brief approach pause tolerates hand jitter")
+                DiagnosticCheck.require(!travel.retainCandidate(at: CGPoint(x: approaching.x - 10, y: approaching.y + 10), now: travelTime.addingTimeInterval(0.12)), "Reversing closes even inside the old source region")
+                travel.stage(CapturedText(text: "Test", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
+                DiagnosticCheck.require(travel.retainCandidate(at: approaching, now: travelTime))
+                DiagnosticCheck.require(!travel.retainCandidate(at: approaching, now: travelTime.addingTimeInterval(0.21)), "Approach grace expires when movement stops")
                 var opened = 0
-                monitor.showBadge = { _ in badge }
+                monitor.showBadge = { _, _ in badge }
                 model.showCard = { _ in opened += 1 }
                 model.clearHover = { [weak monitor] in monitor?.clearCandidate() }
                 monitor.stage(CapturedText(text: "Keep in Dock", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
-                precondition(opened == 0, "Text hover must only show the badge")
-                precondition(monitor.retainCandidate(at: pointer) && opened == 0, "Source hover must not translate")
+                DiagnosticCheck.require(opened == 0, "Text hover must only show the badge")
+                DiagnosticCheck.require(monitor.retainCandidate(at: pointer) && opened == 0, "Source hover must not translate")
                 let center = CGPoint(x: badge.midX, y: badge.midY)
-                precondition(monitor.retainCandidate(at: center) && opened == 1, "Entering the badge must open without a click")
-                precondition(monitor.retainCandidate(at: center) && opened == 1, "Badge hover must not launch duplicate translations")
+                DiagnosticCheck.require(monitor.retainCandidate(at: center) && opened == 1, "Entering the badge must open without a click")
+                DiagnosticCheck.require(monitor.retainCandidate(at: center) && opened == 1, "Badge hover must not launch duplicate translations")
                 let outside = CGPoint(x: 900, y: 700)
                 let now = Date(timeIntervalSince1970: 1000)
                 model.closeDelay = 0.3
-                precondition(monitor.retainCandidate(at: outside, now: now), "Keep the configured grace period")
-                precondition(!monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.31)), "Dismiss after the configured delay")
+                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now), "Keep the configured grace period")
+                DiagnosticCheck.require(!monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.31)), "Dismiss after the configured delay")
                 let frame = TextLogic.panelFrame(anchor: badge, size: CGSize(width: 360, height: 84), visible: CGRect(x: 0, y: 0, width: 1100, height: 780))
                 monitor.visibleCardFrame = { frame }
                 let inside = CGPoint(x: frame.midX, y: frame.midY)
                 @MainActor func stageAgain() {
                     monitor.stage(CapturedText(text: "Keep in Dock", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
-                    precondition(monitor.retainCandidate(at: center, now: now))
+                    DiagnosticCheck.require(monitor.retainCandidate(at: center, now: now))
                 }
                 model.closeDelay = 0
                 stageAgain()
-                precondition(monitor.retainCandidate(at: CGPoint(x: badge.maxX + 6, y: badge.minY - 6), now: now), "Keep the bridge before entering the popup")
-                precondition(monitor.retainCandidate(at: inside, now: now), "Keep the popup while inside")
-                precondition(!monitor.retainCandidate(at: pointer, now: now), "Zero delay closes immediately, even back over the source")
+                DiagnosticCheck.require(monitor.retainCandidate(at: CGPoint(x: badge.maxX + 6, y: badge.minY - 6), now: now), "Keep the bridge before entering the popup")
+                DiagnosticCheck.require(monitor.retainCandidate(at: inside, now: now), "Keep the popup while inside")
+                DiagnosticCheck.require(!monitor.retainCandidate(at: pointer, now: now), "Zero delay closes immediately, even back over the source")
                 model.closeDelay = 0.3
                 stageAgain()
-                precondition(monitor.retainCandidate(at: inside, now: now))
-                precondition(monitor.retainCandidate(at: outside, now: now), "Start delayed close on exit")
-                precondition(monitor.retainCandidate(at: inside, now: now.addingTimeInterval(0.2)), "Reentry cancels pending close")
-                precondition(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.3)))
-                precondition(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.59)), "Reentry resets the full close delay")
-                precondition(!monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.61)), "Close when the restarted delay expires")
+                DiagnosticCheck.require(monitor.retainCandidate(at: inside, now: now))
+                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now), "Start delayed close on exit")
+                DiagnosticCheck.require(monitor.retainCandidate(at: inside, now: now.addingTimeInterval(0.2)), "Reentry cancels pending close")
+                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.3)))
+                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.59)), "Reentry resets the full close delay")
+                DiagnosticCheck.require(!monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.61)), "Close when the restarted delay expires")
                 stageAgain()
                 model.pinned = true
-                precondition(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(10)), "Pinned cards ignore automatic close")
+                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(10)), "Pinned cards ignore automatic close")
                 model.dismiss(force: true)
                 model.present(CapturedText(text: "Selected text", bounds: .zero, method: "test"), cocoaAnchor: source, selection: true)
-                precondition(monitor.retainSelection(), "Selection toolbar must survive pointer movement across the gap, even with zero close delay")
+                DiagnosticCheck.require(monitor.retainSelection(), "Selection toolbar must survive pointer movement across the gap, even with zero close delay")
                 model.translate(to: "original")
-                precondition(monitor.retainSelection(), "Selection result must remain available for copy and replacement")
+                DiagnosticCheck.require(monitor.retainSelection(), "Selection result must remain available for copy and replacement")
                 model.dismiss(force: true)
-                precondition(!monitor.retainSelection(), "Explicit dismissal releases the selection toolbar")
+                DiagnosticCheck.require(!monitor.retainSelection(), "Explicit dismissal releases the selection toolbar")
                 let destination = ReplacementTarget(element: AXUIElementCreateApplication(1), pid: 1,
                     edit: SelectionEdit(value: "你好，世界！", selected: "你好，世界！", range: NSRange(location: 0, length: 6)))
                 model.present(CapturedText(text: "你好，世界！", bounds: .zero, method: "test"),
                               cocoaAnchor: source, selection: true, replacement: destination)
-                precondition(model.hasReplacementTarget && !model.canReplaceSelection, "A selection must preview before replacing")
+                DiagnosticCheck.require(model.hasReplacementTarget && !model.canReplaceSelection, "A selection must preview before replacing")
                 model.translate(to: "original")
-                precondition(!model.canReplaceSelection, "Original text must not enable replacement")
+                DiagnosticCheck.require(!model.canReplaceSelection, "Original text must not enable replacement")
                 model.target = "en"; model.result = "Hello, world!"; model.phase = .result
-                precondition(model.canReplaceSelection && model.showsReplacementControls, "A translated editable selection exposes replacement")
+                DiagnosticCheck.require(model.canReplaceSelection && model.showsReplacementControls, "A translated editable selection exposes replacement")
                 model.phase = .loading
-                precondition(!model.canReplaceSelection, "An unfinished translation cannot replace text")
+                DiagnosticCheck.require(!model.canReplaceSelection, "An unfinished translation cannot replace text")
                 model.phase = .result
                 let clipboardCount = NSPasteboard.general.changeCount
                 model.replaceSelection()
-                precondition(model.isReplacing && !model.canReplaceSelection, "Prevent duplicate replacements")
+                DiagnosticCheck.require(model.isReplacing && !model.canReplaceSelection, "Prevent duplicate replacements")
                 model.translate(to: "original")
-                precondition(model.target == "en", "Language cannot change during a replacement")
+                DiagnosticCheck.require(model.target == "en", "Language cannot change during a replacement")
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                precondition(!model.isReplacing && !model.canReplaceSelection && !model.replacementMessage.isEmpty,
+                DiagnosticCheck.require(!model.isReplacing && !model.canReplaceSelection && !model.replacementMessage.isEmpty,
                              "An invalid destination must fail safely and cannot be retried")
-                precondition(NSPasteboard.general.changeCount == clipboardCount, "Rejected replacements must not touch the clipboard")
+                DiagnosticCheck.require(NSPasteboard.general.changeCount == clipboardCount, "Rejected replacements must not touch the clipboard")
                 model.present(CapturedText(text: "Read-only text", bounds: .zero, method: "test"), cocoaAnchor: source, selection: true)
-                precondition(!model.hasReplacementTarget && !model.showsReplacementControls,
+                DiagnosticCheck.require(!model.hasReplacementTarget && !model.showsReplacementControls,
                              "Read-only selections never expose replacement or stale errors")
-                precondition(monitor.retainSelection(), "Read-only and editable selections share the persistent card")
+                DiagnosticCheck.require(monitor.retainSelection(), "Read-only and editable selections share the persistent card")
                 model.dismiss(force: true)
                 print("Selection-card checks passed: preview gating, original/translation tabs, read-only mode, busy state, invalid target and clipboard safety.")
                 print("Capture safety and hover-flow checks passed: own-element and own-selection rejection, remote element acceptance, permission publication, badge opening, close delay, bridge, reentry and pinned cards.")

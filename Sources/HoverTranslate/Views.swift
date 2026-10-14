@@ -85,7 +85,7 @@ struct MainView: View {
                 Text("识别与翻译均在本机进行").font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }.padding(17).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.white.opacity(0.6)).clipShape(RoundedRectangle(cornerRadius: 16))
-            Text("v0.3.0  /  本地原型").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.secondary).padding(.top, 20)
+            Text("v0.3.1  /  本地原型").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.secondary).padding(.top, 20)
         }.padding(.horizontal, 20).padding(.top, 54).padding(.bottom, 22)
             .frame(width: 204).background(Palette.sidebar)
     }

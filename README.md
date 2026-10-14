@@ -4,7 +4,7 @@
 
 Native macOS hover and selection translator built with SwiftUI, AppKit, Vision, Accessibility and Apple Translation. Text and image recognition run locally; no third-party translation API or API key is required.
 
-> 当前为 v0.3.0 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
+> 当前为 v0.3.1 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
 
 ## 功能
 

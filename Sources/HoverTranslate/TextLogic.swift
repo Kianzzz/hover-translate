@@ -50,15 +50,47 @@ enum TextLogic {
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
-    static func badgeFrame(pointer: CGPoint, visible: CGRect) -> CGRect {
-        let size: CGFloat = 30
-        var x = pointer.x + 14
-        var y = pointer.y - size - 10
-        if x + size > visible.maxX - 6 { x = pointer.x - size - 14 }
-        if y < visible.minY + 6 { y = pointer.y + 12 }
-        x = min(max(x, visible.minX + 6), visible.maxX - size - 6)
-        y = min(max(y, visible.minY + 6), visible.maxY - size - 6)
-        return CGRect(x: x, y: y, width: size, height: size)
+    static func badgeFrame(pointer: CGPoint, visible: CGRect, source: CGRect = .zero) -> CGRect {
+        let size: CGFloat = 30, gap: CGFloat = 6
+        let safe = visible.insetBy(dx: 6, dy: 6)
+        func clamped(_ x: CGFloat, _ y: CGFloat) -> CGRect {
+            CGRect(x: min(max(x, safe.minX), safe.maxX - size),
+                   y: min(max(y, safe.minY), safe.maxY - size), width: size, height: size)
+        }
+        // Use real text bounds when available. Prefer the closest edge, not the
+        // end of a long sentence. Keep the badge fixed while the pointer travels.
+        if !source.isEmpty, !source.isInfinite, !source.isNull {
+            let options = [
+                clamped(pointer.x - size / 2, source.minY - gap - size),
+                clamped(pointer.x - size / 2, source.maxY + gap),
+                clamped(source.maxX + gap, pointer.y - size / 2),
+                clamped(source.minX - gap - size, pointer.y - size / 2)
+            ].filter { !$0.intersects(source.insetBy(dx: -3, dy: -3)) }
+            if let closest = options.min(by: { distance(pointer, to: $0) < distance(pointer, to: $1) }),
+               distance(pointer, to: closest) <= 64 { return closest }
+        }
+        // Some apps expose the entire container instead of a text line. Do not
+        // send the icon to that container's distant edge.
+        let x = pointer.x + gap + size <= safe.maxX ? pointer.x + gap : pointer.x - size - gap
+        let y = pointer.y - size - gap >= safe.minY ? pointer.y - size - gap : pointer.y + gap
+        return clamped(x, y)
+    }
+
+    static func distance(_ point: CGPoint, to rect: CGRect) -> CGFloat {
+        hypot(max(rect.minX - point.x, 0, point.x - rect.maxX),
+              max(rect.minY - point.y, 0, point.y - rect.maxY))
+    }
+
+    static func movingTowardBadge(from previous: CGPoint, to point: CGPoint, badge: CGRect) -> Bool {
+        let dx = point.x - previous.x, dy = point.y - previous.y
+        let length = hypot(dx, dy)
+        guard length >= 0.5 else { return false }
+        let tx = badge.midX - previous.x, ty = badge.midY - previous.y
+        let targetLength = hypot(tx, ty)
+        guard targetLength > 0 else { return false }
+        // A generous approach cone permits diagonal movement and curved paths.
+        return (dx * tx + dy * ty) / (length * targetLength) >= 0.35
+            && distance(point, to: badge) < distance(previous, to: badge)
     }
 
     static func hoverTransitContains(_ point: CGPoint, from source: CGRect, to destination: CGRect) -> Bool {
