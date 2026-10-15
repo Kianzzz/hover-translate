@@ -138,6 +138,7 @@ enum TextCapture {
                 // Check the ancestry before falling back to visible pixels.
                 if elements.contains(where: isProtected) { continuation.resume(throwing: CaptureError.protectedText); return }
                 let compactRoles: Set<String> = ["AXStaticText", "AXButton", "AXMenuItem", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXHeading", "AXTextField", "AXCell", "AXTab", "AXRow", "AXImage"]
+                var fallback: CapturedText?
                 for element in elements {
                     let role = attribute(element, kAXRoleAttribute) as? String ?? ""
                     if role == "AXWindow" || role == "AXApplication" { break }
@@ -166,14 +167,16 @@ enum TextCapture {
                     }
                     // UI controls, system menus and labels often expose a title or description,
                     // not a text value. Large document containers still go through local OCR.
-                    let compact = rect.height <= 130 && text.count <= 500 && text.components(separatedBy: .newlines).count <= 4
+                    let compact = rect.height <= 240 && text.count <= 4000 && text.components(separatedBy: .newlines).count <= 12
                     if compact && compactRoles.contains(role) {
                         if !word || text.split(whereSeparator: { $0.isWhitespace }).count == 1 {
-                            continuation.resume(returning: CapturedText(text: text, bounds: rect, method: "系统取词 · 控件 / 菜单")); return
+                            // Preserve complete static paragraphs when AX exposes no character
+                            // position; controls keep their own labels as before.
+                            if fallback == nil { fallback = CapturedText(text: text, bounds: rect, method: "系统取词 · 文字块 / 控件") }
                         }
                     }
                 }
-                continuation.resume(returning: nil)
+                continuation.resume(returning: fallback)
             }
         }
     }
@@ -184,7 +187,10 @@ enum TextCapture {
         var count: UInt32 = 0
         guard CGGetDisplaysWithPoint(point, 1, &displayID, &count) == .success, count > 0 else { return nil }
         let display = CGDisplayBounds(displayID)
-        let crop = CGRect(x: point.x - 440, y: point.y - 140, width: 880, height: 280).intersection(display)
+        let width = min(1400, display.width), height = min(720, display.height)
+        let crop = CGRect(x: min(max(point.x - width / 2, display.minX), display.maxX - width),
+                          y: min(max(point.y - height / 2, display.minY), display.maxY - height),
+                          width: width, height: height)
         let image = try await SCScreenshotManager.captureImage(in: crop)
         return try await recognize(image: image, region: crop, at: point, word: word)
     }
@@ -222,6 +228,10 @@ enum TextCapture {
                         .min(by: { abs($0.1.midY - point.y) < abs($1.1.midY - point.y) }) else {
                         continuation.resume(returning: nil); return
                     }
+                    guard let originalHit = lines.indices.min(by: { left, right in
+                        hypot(lines[left].1.midX - hit.1.midX, lines[left].1.midY - hit.1.midY)
+                            < hypot(lines[right].1.midX - hit.1.midX, lines[right].1.midY - hit.1.midY)
+                    }) else { continuation.resume(returning: nil); return }
                     var hitRegion = crop
                     // Nearby control icons can make the fast detector drop an initial
                     // letter. Re-read just this line, excluding surrounding UI icons.
@@ -244,12 +254,16 @@ enum TextCapture {
                         if job.cancelled { throw CancellationError() }
                         let refinedRegion = CGRect(x: crop.minX + pixels.minX / scaleX, y: crop.minY + pixels.minY / scaleY,
                                                    width: CGFloat(lineImage.width) / scaleX, height: CGFloat(lineImage.height) / scaleY)
-                        if let observation = refinement.results?.first, let text = observation.topCandidates(1).first, text.confidence >= 0.35 {
+                        let refinements = (refinement.results ?? []).compactMap { observation -> (String, CGRect, VNRecognizedText)? in
+                            guard let text = observation.topCandidates(1).first, text.confidence >= 0.35 else { return nil }
                             let b = observation.boundingBox
                             let box = CGRect(x: refinedRegion.minX + b.minX * refinedRegion.width,
                                              y: refinedRegion.minY + (1 - b.maxY) * refinedRegion.height,
                                              width: b.width * refinedRegion.width, height: b.height * refinedRegion.height)
-                            hit = (text.string, box, text)
+                            return box.insetBy(dx: -4, dy: -4).contains(point) ? (text.string, box, text) : nil
+                        }
+                        if let refined = refinements.min(by: { abs($0.1.midY - point.y) < abs($1.1.midY - point.y) }) {
+                            hit = refined
                             hitRegion = refinedRegion
                         }
                     }
@@ -270,7 +284,26 @@ enum TextCapture {
                         }
                         continuation.resume(returning: found); return
                     }
-                    continuation.resume(returning: CapturedText(text: hit.0, bounds: hit.1, method: "本机 OCR · 当前行"))
+                    // Locate the hovered word within the line so a line containing
+                    // the end of one sentence and start of another picks the right one.
+                    var offset = min(max(0, Int((point.x - hit.1.minX) / max(1, hit.1.width) * CGFloat(hit.0.utf16.count))), max(0, hit.0.utf16.count - 1))
+                    let tokenizer = NLTokenizer(unit: .word)
+                    tokenizer.string = hit.0
+                    tokenizer.enumerateTokens(in: hit.0.startIndex..<hit.0.endIndex) { range, _ in
+                        if let b = try? hit.2.boundingBox(for: range)?.boundingBox {
+                            let box = CGRect(x: hitRegion.minX + b.minX * hitRegion.width,
+                                             y: hitRegion.minY + (1 - b.maxY) * hitRegion.height,
+                                             width: b.width * hitRegion.width, height: b.height * hitRegion.height)
+                            if box.insetBy(dx: -3, dy: -3).contains(point) {
+                                offset = NSRange(range, in: hit.0).location; return false
+                            }
+                        }
+                        return true
+                    }
+                    var context = lines.map { TextLogic.OCRLine(text: $0.0, bounds: $0.1) }
+                    context[originalHit] = TextLogic.OCRLine(text: hit.0, bounds: hit.1)
+                    let sentence = TextLogic.ocrSentence(lines: context, hit: originalHit, offset: offset)
+                    continuation.resume(returning: sentence.map { CapturedText(text: $0, bounds: hit.1, method: "本机 OCR · 句子 / 段落") })
                 } catch { continuation.resume(throwing: error) }
             }
             }

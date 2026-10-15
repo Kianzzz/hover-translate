@@ -85,7 +85,7 @@ struct MainView: View {
                 Text("识别与翻译均在本机进行").font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }.padding(17).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.white.opacity(0.6)).clipShape(RoundedRectangle(cornerRadius: 16))
-            Text("v0.3.1  /  本地原型").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.secondary).padding(.top, 20)
+            Text("v0.3.2  /  本地原型").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.secondary).padding(.top, 20)
         }.padding(.horizontal, 20).padding(.top, 54).padding(.bottom, 22)
             .frame(width: 204).background(Palette.sidebar)
     }
@@ -434,7 +434,7 @@ struct SettingsView: View {
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 235)
                     Spacer()
                 }
-                Text("OCR 当前识别鼠标所在行；跨行整句合并将在后续版本完善。")
+                Text("优先识别完整句子；OCR 会按行距与对齐合并同段内容，屏幕外文字无法识别。")
                     .font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }.padding(22).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(Palette.line, lineWidth: 1))
@@ -515,7 +515,7 @@ struct TranslationCard: View {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(model.result).font(.system(size: CardLayout.translationFontSize, weight: .regular))
-                                    .lineSpacing(3).textSelection(.enabled)
+                                    .lineSpacing(3).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 if model.phase == .failure {
                                     Button("打开设置") { model.dismiss(force: true); model.settings() }

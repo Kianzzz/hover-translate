@@ -4,7 +4,7 @@
 
 Native macOS hover and selection translator built with SwiftUI, AppKit, Vision, Accessibility and Apple Translation. Text and image recognition run locally; no third-party translation API or API key is required.
 
-> 当前为 v0.3.1 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
+> 当前为 v0.3.2 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
 
 ## 功能
 
@@ -13,6 +13,8 @@ Native macOS hover and selection translator built with SwiftUI, AppKit, Vision, 
 - **输入框替换**：确认选区来自可安全编辑的输入框后，显示“替换选中文字”。先预览译文，点击后才替换选中的部分；成功后关闭浮窗并交回输入焦点，可尝试在原应用按 `⌘Z` 撤销。
 - **局部 OCR**：对于无法直接读取的系统界面或图片，在获得屏幕录制权限后截取鼠标附近内容，使用 Vision 识别。
 - **可调触发**：悬停等待 300–1500 ms，移开后的关闭等待 0–1000 ms。选区浮窗不因鼠标移开原文而自动关闭。
+- **完整语境**：优先提取鼠标所在句子；软换行会合并，无法定位字符的独立文字块保留完整内容。OCR 按行距与左对齐合并同段文字，再提取所在句子。
+- **长译文**：正文按内容增高，最高 260 点；更长内容在浮窗内滚动阅读。
 - **外观**：紧凑柔雾玻璃译文浮窗；绿色悬停图标随系统深浅外观自动调整明暗。
 
 ![可编辑选区浮窗样式](docs/images/selection-translation.png)
@@ -89,8 +91,9 @@ zsh scripts/test.sh
 "$HOME/Applications/浮译.app/Contents/MacOS/HoverTranslate" --check-engine
 ```
 
-- `test.sh`：直接编译执行 28 项文本、坐标、浮窗尺寸与选区替换边界检查。
+- `test.sh`：直接编译执行 44 项文本、坐标、浮窗尺寸与选区替换边界检查。
 - `--check-hover-flow`：验证取词安全、悬停生命周期、选区浮窗保留、替换按钮状态和无效目标的剪贴板安全；不执行对真实输入框的替换。
+- `python3 scripts/check-ocr-context.py <HoverTranslate可执行文件路径>`：使用仓库内合成文字图片验证真实 Vision 跨行 OCR、旁栏隔离、段落间隔、菜单与空白命中；需要 Python 3，不读取屏幕。
 - `--check-engine`：检查已安装的语言包，并在可用时执行真实中英双向翻译。
 - `open "$HOME/Applications/浮译.app" --args --check-window-flow`：执行 12 轮原生窗口生命周期检查，交替检查带替换栏与只读模式，随后退出。运行前请退出正常实例。
 - `--check-self-hit-flow`：针对自身 AX 命中的原生检查，需要当前安装已有有效辅助功能授权；运行前请退出正常实例。
@@ -100,7 +103,7 @@ zsh scripts/test.sh
 ## 已知边界
 
 - 部分应用不开放 Accessibility 文字、选区或安全编辑信息，因此无法直接取词或提供替换按钮。
-- OCR 当前按鼠标所在行或词识别，尚未合并跨行完整句；细小、模糊或手写文字可能识别不准。
+- OCR 读取鼠标附近最多 1400 × 720 点的可见区域，按布局合并跨行句子；屏幕外或识别区域外的内容无法补全。多栏、缩进、密集列表和细小、模糊或手写文字仍可能识别不准。
 - 本机 OCR 使用英文快速识别及 CPU 处理路径，以降低模型初始化等待；中文选区主要依赖 Accessibility。
 - 应用提供的选区边界可能不准确；屏幕边缘可能限制浮窗摆放。选区浮窗会保留至外部点击、滚动、继续输入或主动关闭。
 - 当前语言组合面向简体中文与英文，未验证其他语言。

@@ -40,7 +40,9 @@ struct CoreChecks {
         let shortHeight = CardLayout.bodyHeight(result: "保留在程序坞", width: shortWidth, loading: false, choosing: false, failure: false)
         let longHeight = CardLayout.bodyHeight(result: String(repeating: "较长的译文。", count: 100), width: longWidth, loading: false, choosing: false, failure: false)
         expect(shortHeight + 64 <= 90, "短语浮窗整体高度不超过 90 点")
-        expect(longHeight == 60, "长译文限制在三行附近并滚动阅读")
+        expect(longHeight == CardLayout.maximumBodyHeight, "长译文到 260 点上限后滚动阅读")
+        let mediumHeight = CardLayout.bodyHeight(result: String(repeating: "一段更完整的中文翻译，保留上下文。", count: 8), width: 360, loading: false, choosing: false, failure: false)
+        expect(mediumHeight > 60 && mediumHeight < CardLayout.maximumBodyHeight, "中等译文高度自适应增长")
         let draft = "保留🌿 | 你好，世界！ | 不动"
         let selected = "你好，世界！"
         let range = (draft as NSString).range(of: selected)
@@ -62,7 +64,31 @@ struct CoreChecks {
         expect(!TextLogic.movingTowardBadge(from: origin, to: origin, badge: nearby), "静止不能无限延续接近状态")
         let huge = TextLogic.badgeFrame(pointer: origin, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: CGRect(x: 0, y: 0, width: 1000, height: 800))
         expect(TextLogic.distance(origin, to: huge) < 10, "容器级边界不能把图标推远")
-        print("34 core checks passed.")
+        let wrapped = "Previous sentence. This sentence continues across\na visual line break and ends here. Next sentence."
+        let wrappedOffset = (wrapped as NSString).range(of: "visual").location
+        expect(TextLogic.segment(wrapped, utf16Offset: wrappedOffset, word: false) == "This sentence continues across a visual line break and ends here.", "系统取词跨软换行提取完整句子")
+        let paragraphs = "First paragraph without punctuation\n\nSecond paragraph without punctuation"
+        expect(TextLogic.segment(paragraphs, utf16Offset: 8, word: false) == "First paragraph without punctuation", "空行隔开的段落不能混在一起")
+        let crlf = "A sentence continues\r\non the next line."
+        expect(TextLogic.segment(crlf, utf16Offset: 24, word: false) == "A sentence continues  on the next line.", "CRLF 换行不误判为段落分隔")
+        let split = "你好 🌿。A long sentence wraps\nacross this line."
+        expect(TextLogic.segment(split, utf16Offset: (split as NSString).range(of: "across").location, word: false) == "A long sentence wraps across this line.", "跨行与 emoji UTF16 偏移保持准确")
+        func ocrLine(_ text: String, _ x: CGFloat, _ y: CGFloat, _ width: CGFloat = 420) -> TextLogic.OCRLine {
+            TextLogic.OCRLine(text: text, bounds: CGRect(x: x, y: y, width: width, height: 20))
+        }
+        let context = [ocrLine("Earlier sentence. This is a long sentence that", 100, 100),
+                       ocrLine("continues on the next line and needs context", 100, 128),
+                       ocrLine("to translate correctly. Another sentence.", 100, 156),
+                       ocrLine("A separate paragraph should stay separate.", 100, 210),
+                       ocrLine("An unrelated sidebar should never be included.", 620, 128)]
+        expect(TextLogic.ocrSentence(lines: context, hit: 1, offset: 5) == "This is a long sentence that continues on the next line and needs context to translate correctly.", "OCR 合并跨三行句子并隔离相邻栏目")
+        expect(TextLogic.ocrSentence(lines: context, hit: 2, offset: 30) == "Another sentence.", "同一行按鼠标位置选中正确句子")
+        expect(TextLogic.ocrSentence(lines: context, hit: 3, offset: 10) == context[3].text, "段落间距阻止跨段合并")
+        let menu = [ocrLine("Keep in Dock", 100, 100, 110), ocrLine("Open at Login", 100, 128, 110)]
+        expect(TextLogic.ocrSentence(lines: menu, hit: 0, offset: 3) == "Keep in Dock", "短菜单项不能拼成段落")
+        let missing = [ocrLine("Text on the first line of a longer paragraph", 100, 100), ocrLine("Text in a distant paragraph should not join.", 100, 260)]
+        expect(TextLogic.ocrSentence(lines: missing, hit: 0, offset: 10) == missing[0].text, "较大空隙不能跨越")
+        print("44 core checks passed.")
     }
     static func expect(_ condition: @autoclosure () -> Bool, _ name: String) {
         DiagnosticCheck.require(condition(), name)

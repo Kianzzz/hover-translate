@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     try? await Task.sleep(nanoseconds: 80_000_000)
                     DiagnosticCheck.require(self.panel.frame.width == self.model.cardWidth)
                     DiagnosticCheck.require(self.panel.frame.height == self.model.cardHeight)
-                    DiagnosticCheck.require(self.panel.frame.height <= 158)
+                    DiagnosticCheck.require(self.panel.frame.height <= 388)
                     DiagnosticCheck.require(self.panel.contentView is NSVisualEffectView)
                     self.model.dismiss(force: true)
                     self.window.performClose(nil)

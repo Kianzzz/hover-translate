@@ -22,15 +22,83 @@ enum TextLogic {
         text.range(of: "[A-Za-z]{2,}", options: .regularExpression) != nil && language(of: text) == "en"
     }
 
-    static func segment(_ text: String, utf16Offset: Int, word: Bool) -> String? {
-        guard !text.isEmpty, utf16Offset >= 0, utf16Offset < text.utf16.count else { return nil }
-        let utfIndex = text.utf16.index(text.utf16.startIndex, offsetBy: utf16Offset)
-        guard let index = String.Index(utfIndex, within: text) else { return nil }
+    /// Keep UTF16 offsets stable while treating soft line wraps as spaces.
+    /// Blank lines remain paragraph boundaries; never truncate a sentence mid-way.
+    static func segmentRange(_ text: String, utf16Offset: Int, word: Bool) -> NSRange? {
+        let raw = text as NSString
+        guard raw.length > 0, utf16Offset >= 0, utf16Offset < raw.length else { return nil }
+        var start = 0, end = raw.length
+        if !word {
+            guard let breaks = try? NSRegularExpression(pattern: "\\n[ \\t\\r]*\\n|\\r[ \\t]*\\r") else { return nil }
+            for boundary in breaks.matches(in: text, range: NSRange(location: 0, length: raw.length)) {
+                if NSMaxRange(boundary.range) <= utf16Offset { start = NSMaxRange(boundary.range) }
+                else if boundary.range.location > utf16Offset { end = boundary.range.location; break }
+                else { return nil }
+            }
+        }
+        let paragraph = raw.substring(with: NSRange(location: start, length: end - start))
+            .replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
+        let offset = utf16Offset - start
+        let utf = paragraph.utf16.index(paragraph.utf16.startIndex, offsetBy: offset)
+        guard let index = String.Index(utf, within: paragraph) else { return nil }
         let tokenizer = NLTokenizer(unit: word ? .word : .sentence)
-        tokenizer.string = text
-        let range = tokenizer.tokenRange(at: index)
-        let result = clean(String(text[range]))
-        return !result.isEmpty && result.count <= 1200 ? result : nil
+        tokenizer.string = paragraph
+        let token = NSRange(tokenizer.tokenRange(at: index), in: paragraph)
+        guard token.length > 0 else { return nil }
+        return NSRange(location: start + token.location, length: token.length)
+    }
+
+    static func segment(_ text: String, utf16Offset: Int, word: Bool) -> String? {
+        guard let range = segmentRange(text, utf16Offset: utf16Offset, word: word) else { return nil }
+        let result = clean((text as NSString).substring(with: range)
+            .replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " "))
+        return !result.isEmpty && result.count <= 4000 ? result : nil
+    }
+
+    struct OCRLine {
+        let text: String
+        let bounds: CGRect
+    }
+
+    /// Vision boxes use top-left coordinates here. Follow only the same column,
+    /// with normal line spacing, stopping at paragraph gaps or neighboring UI.
+    static func ocrSentence(lines: [OCRLine], hit: Int, offset: Int) -> String? {
+        guard lines.indices.contains(hit) else { return nil }
+        func follows(_ top: OCRLine, _ bottom: OCRLine) -> Bool {
+            let height = max(top.bounds.height, bottom.bounds.height)
+            let gap = bottom.bounds.minY - top.bounds.maxY
+            let aligned = abs(top.bounds.minX - bottom.bounds.minX) <= max(20, height * 1.3)
+            let prose = max(top.text.count, bottom.text.count) >= 32
+                && max(top.bounds.width, bottom.bounds.width) >= 160
+            return aligned && prose && bottom.bounds.midY > top.bounds.midY
+                && gap >= -height * 0.2 && gap <= height * 1.15
+        }
+        let order = lines.indices.sorted { lines[$0].bounds.midY < lines[$1].bounds.midY }
+        guard let position = order.firstIndex(of: hit) else { return nil }
+        var block = [hit]
+        var current = hit
+        for index in order[..<position].reversed() {
+            if lines[index].bounds.midY >= lines[current].bounds.minY { continue }
+            if follows(lines[index], lines[current]) {
+                block.insert(index, at: 0); current = index
+                if block.count >= 14 { break }
+            } else if abs(lines[index].bounds.minX - lines[current].bounds.minX) <= 30 { break }
+        }
+        current = hit
+        for index in order[(position + 1)...] {
+            if lines[index].bounds.midY <= lines[current].bounds.maxY { continue }
+            if follows(lines[current], lines[index]) {
+                block.append(index); current = index
+                if block.count >= 28 { break }
+            } else if abs(lines[index].bounds.minX - lines[current].bounds.minX) <= 30 { break }
+        }
+        var joined = "", hitOffset = 0
+        for index in block {
+            if !joined.isEmpty { joined += " " }
+            if index == hit { hitOffset = joined.utf16.count + min(max(0, offset), max(0, lines[index].text.utf16.count - 1)) }
+            joined += lines[index].text
+        }
+        return segment(joined, utf16Offset: hitOffset, word: false)
     }
 
     /// Cocoa uses bottom-left screen coordinates; AX and screen capture use top-left.
@@ -130,6 +198,7 @@ enum CardLayout {
     static let maximumWidth: CGFloat = 520
     static let translationFontSize: CGFloat = 14
     static let headerHeight: CGFloat = 30
+    static let maximumBodyHeight: CGFloat = 260
 
     static func width(source: String, result: String) -> CGFloat {
         func measured(_ text: String, size: CGFloat) -> CGFloat {
@@ -153,6 +222,6 @@ enum CardLayout {
         let measured = ceil((result as NSString).boundingRect(with: CGSize(width: width - 24, height: 10000),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: NSFont.systemFont(ofSize: translationFontSize), .paragraphStyle: paragraph]).height)
-        return failure ? min(88, max(42, measured + 24)) : min(60, max(20, measured))
+        return failure ? min(88, max(42, measured + 24)) : min(maximumBodyHeight, max(20, measured + 2))
     }
 }
