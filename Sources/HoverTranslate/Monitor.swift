@@ -10,6 +10,9 @@ final class HoverMonitor {
         var previousPoint: CGPoint
         var approachUntil = Date.distantPast
         let demo: Bool
+        /// A selection badge waits for an outside click, scroll or key instead of pointer movement.
+        var selection = false
+        var replacement: ReplacementTarget?
         var opened = false
         var enteredCard = false
     }
@@ -49,7 +52,7 @@ final class HoverMonitor {
                 if self.model.isReplacing { return }
                 if event.type == .keyDown {
                     if event.keyCode == 53 { self.selectionTask?.cancel(); self.model.dismiss(force: true) }
-                    else if self.model.selectionVisible { self.model.dismiss() }
+                    else if self.model.selectionVisible || self.hasSelectionBadge { self.model.dismiss() }
                     return
                 }
                 if event.type == .leftMouseUp, self.model.enabled, self.model.selectionEnabled {
@@ -70,17 +73,21 @@ final class HoverMonitor {
         }
     }
 
+    var hasSelectionBadge: Bool { candidate?.selection == true && candidate?.opened == false }
+
     func clearCandidate() {
         candidate = nil
         outsideSince = nil
         hideBadge?()
     }
 
-    func stage(_ capture: CapturedText, sourceRect: CGRect, pointer: CGPoint, demo: Bool = false) {
+    func stage(_ capture: CapturedText, sourceRect: CGRect, pointer: CGPoint, demo: Bool = false,
+               selection: Bool = false, replacement: ReplacementTarget? = nil) {
         guard !model.pinned, let badgeRect = showBadge?(pointer, sourceRect) else { return }
-        candidate = Candidate(capture: capture, sourceRect: sourceRect, badgeRect: badgeRect, origin: pointer, previousPoint: pointer, demo: demo)
+        candidate = Candidate(capture: capture, sourceRect: sourceRect, badgeRect: badgeRect, origin: pointer, previousPoint: pointer,
+                              demo: demo, selection: selection, replacement: replacement)
         outsideSince = nil
-        model.status = "已发现英文 · 将鼠标移到“译”图标查看译文"
+        model.status = selection ? "已选中文字 · 将鼠标移到“译”图标查看译文" : "已发现外语 · 将鼠标移到“译”图标查看译文"
     }
 
     private func resetMotion(at point: CGPoint) {
@@ -95,7 +102,7 @@ final class HoverMonitor {
     func retainCandidate(at point: CGPoint, now: Date = Date()) -> Bool {
         guard var current = candidate else { return false }
         if model.pinned { hideBadge?(); return true }
-        if !current.demo && (!model.enabled || !model.hoverEnabled) {
+        if !current.demo && (!model.enabled || !(current.selection ? model.selectionEnabled : model.hoverEnabled)) {
             model.dismiss(force: true)
             resetMotion(at: point)
             return false
@@ -111,10 +118,17 @@ final class HoverMonitor {
             if !current.opened {
                 current.opened = true
                 candidate = current
-                model.present(current.capture, cocoaAnchor: current.badgeRect, selection: false)
+                if current.selection {
+                    // The selection card persists on its own; place it beyond both text and icon.
+                    model.present(current.capture, cocoaAnchor: current.sourceRect.isEmpty ? current.badgeRect : current.sourceRect.union(current.badgeRect),
+                                  selection: true, replacement: current.replacement)
+                } else {
+                    model.present(current.capture, cocoaAnchor: current.badgeRect, selection: false)
+                }
             }
             return true
         }
+        if current.selection { outsideSince = nil; return true }
         let movement = hypot(point.x - current.previousPoint.x, point.y - current.previousPoint.y)
         let toward = TextLogic.movingTowardBadge(from: current.previousPoint, to: point, badge: current.badgeRect)
         if movement >= 0.5 {
@@ -181,11 +195,16 @@ final class HoverMonitor {
                 var capture: CapturedText?
                 if model.accessibility { capture = try await TextCapture.accessible(at: quartz, word: word) }
                 guard !Task.isCancelled, token == revision else { return }
-                if (capture == nil || !TextLogic.hasEnglish(capture!.text)), model.ocrEnabled, model.screenPermission {
+                let native = model.nativeLanguage
+                // Only OCR where the system exposes no text: if it read native text,
+                // the Latin-only recognizer would misread those glyphs as gibberish.
+                if capture == nil, model.ocrEnabled, model.screenPermission {
                     capture = try await TextCapture.ocr(at: quartz, word: word)
+                    if let text = capture?.text, !TextLogic.plausibleOCR(text) { capture = nil }
                 }
+                // Native-language text never shows the hover icon; selecting it still does.
                 guard !Task.isCancelled, token == revision, model.enabled, !model.pinned,
-                      let capture, TextLogic.hasEnglish(capture.text) else { return }
+                      let capture, TextLogic.isForeign(capture.text, native: native) else { return }
                 stage(capture, sourceRect: TextLogic.cocoaRect(capture.bounds, desktopTop: desktopTop), pointer: point)
             } catch {
                 guard !Task.isCancelled, token == revision else { return }
@@ -234,7 +253,14 @@ final class HoverMonitor {
                 let capture = try await TextCapture.selected(pid: pid, fallbackPoint: point)
                 guard !Task.isCancelled, (!automatic || model.enabled), NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
                 let anchor = TextLogic.cocoaRect(capture.text.bounds, desktopTop: desktopTop)
-                model.present(capture.text, cocoaAnchor: anchor, selection: true, replacement: capture.replacement)
+                if automatic {
+                    // Mouse selections show the icon first; the shortcut and menu open the card directly.
+                    let pointer = NSEvent.mouseLocation
+                    stage(capture.text, sourceRect: capture.text.bounds.isEmpty ? .zero : anchor, pointer: pointer,
+                          selection: true, replacement: capture.replacement)
+                } else {
+                    model.present(capture.text, cocoaAnchor: anchor, selection: true, replacement: capture.replacement)
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 attempted = false

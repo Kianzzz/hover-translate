@@ -156,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         glass.state = .active
         glass.appearance = NSAppearance(named: .aqua)
         glass.wantsLayer = true
-        glass.layer?.cornerRadius = 11
+        glass.layer?.cornerRadius = 14
         glass.layer?.masksToBounds = true
         let content = fixedHostingView(TranslationCard(model: model), size: glass.bounds.size)
         content.autoresizingMask = [.width, .height]
@@ -300,7 +300,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func settings() { model.settings() }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationDidBecomeActive(_ notification: Notification) { model.continuePermissionSetup() }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        model.continuePermissionSetup()
+        // Packs downloaded in System Settings appear when the user comes back.
+        Task { await model.refreshLanguage() }
+    }
     func windowWillClose(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in self?.model.dismiss(force: true) }
     }
@@ -393,7 +397,16 @@ struct Entry {
                 model.dismiss(force: true)
                 model.present(CapturedText(text: "Selected text", bounds: .zero, method: "test"), cocoaAnchor: source, selection: true)
                 DiagnosticCheck.require(monitor.retainSelection(), "Selection toolbar must survive pointer movement across the gap, even with zero close delay")
-                model.translate(to: "original")
+                DiagnosticCheck.require(model.target == "zh-Hans" && model.phase != .idle, "Selections translate into the preferred language immediately")
+                model.dismiss(force: true)
+                // Mouse selections stage a persistent badge first, regardless of language.
+                var selectionOpened = 0
+                model.showCard = { _ in selectionOpened += 1 }
+                monitor.stage(CapturedText(text: "你好，世界", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true, selection: true)
+                DiagnosticCheck.require(monitor.hasSelectionBadge && selectionOpened == 0, "Selecting native text shows the badge without opening")
+                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(5)), "The selection badge ignores pointer movement and close delay")
+                DiagnosticCheck.require(monitor.retainCandidate(at: center, now: now) && selectionOpened == 1 && model.selectionVisible, "Entering the selection badge opens the selection card")
+                DiagnosticCheck.require(model.target == "en", "Native Chinese falls back to English")
                 DiagnosticCheck.require(monitor.retainSelection(), "Selection result must remain available for copy and replacement")
                 model.dismiss(force: true)
                 DiagnosticCheck.require(!monitor.retainSelection(), "Explicit dismissal releases the selection toolbar")
@@ -402,8 +415,8 @@ struct Entry {
                 model.present(CapturedText(text: "你好，世界！", bounds: .zero, method: "test"),
                               cocoaAnchor: source, selection: true, replacement: destination)
                 DiagnosticCheck.require(model.hasReplacementTarget && !model.canReplaceSelection, "A selection must preview before replacing")
-                model.translate(to: "original")
-                DiagnosticCheck.require(!model.canReplaceSelection, "Original text must not enable replacement")
+                model.result = "你好，世界！"; model.phase = .result
+                DiagnosticCheck.require(!model.canReplaceSelection, "An unchanged result must not enable replacement")
                 model.target = "en"; model.result = "Hello, world!"; model.phase = .result
                 DiagnosticCheck.require(model.canReplaceSelection && model.showsReplacementControls, "A translated editable selection exposes replacement")
                 model.phase = .loading
@@ -412,7 +425,7 @@ struct Entry {
                 let clipboardCount = NSPasteboard.general.changeCount
                 model.replaceSelection()
                 DiagnosticCheck.require(model.isReplacing && !model.canReplaceSelection, "Prevent duplicate replacements")
-                model.translate(to: "original")
+                model.translate(to: "ja")
                 DiagnosticCheck.require(model.target == "en", "Language cannot change during a replacement")
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 DiagnosticCheck.require(!model.isReplacing && !model.canReplaceSelection && !model.replacementMessage.isEmpty,
@@ -423,7 +436,7 @@ struct Entry {
                              "Read-only selections never expose replacement or stale errors")
                 DiagnosticCheck.require(monitor.retainSelection(), "Read-only and editable selections share the persistent card")
                 model.dismiss(force: true)
-                print("Selection-card checks passed: preview gating, original/translation tabs, read-only mode, busy state, invalid target and clipboard safety.")
+                print("Selection-card checks passed: preview gating, selection badge, native fallback, read-only mode, busy state, invalid target and clipboard safety.")
                 print("Capture safety and hover-flow checks passed: own-element and own-selection rejection, remote element acceptance, permission publication, badge opening, close delay, bridge, reentry and pinned cards.")
                 exit(0)
             }
@@ -443,6 +456,18 @@ struct Entry {
             }
             dispatchMain()
         }
+        if CommandLine.arguments.contains("--check-packs") {
+            Task { @MainActor in
+                for id in ["en", "ja", "ja-JP", "ko", "ko-KR", "fr"] {
+                    let low = await TranslationRuntime.availability().status(from: Locale.Language(identifier: id), to: Locale.Language(identifier: "zh-Hans"))
+                    let plain = await LanguageAvailability().status(from: Locale.Language(identifier: id), to: Locale.Language(identifier: "zh-Hans"))
+                    let cn = await LanguageAvailability().status(from: Locale.Language(identifier: id), to: Locale.Language(identifier: "zh-CN"))
+                    print(id, "lowLatency:", low, "default:", plain, "zh-CN:", cn)
+                }
+                exit(0)
+            }
+            dispatchMain()
+        }
         if CommandLine.arguments.contains("--check-engine") {
             Task { @MainActor in
                 let availability = TranslationRuntime.availability()
@@ -451,8 +476,8 @@ struct Entry {
                 if status == .installed {
                     do {
                         let engine = LocalTranslator()
-                        print("English → Chinese: \(try await engine.translate("Good design makes complex things feel simple.", target: "zh-Hans"))")
-                        print("Chinese → English: \(try await engine.translate("保持好奇，总有更多值得发现。", target: "en"))")
+                        print("English → Chinese: \(try await engine.translate("Good design makes complex things feel simple.", from: "en", to: "zh-Hans"))")
+                        print("Chinese → English: \(try await engine.translate("保持好奇，总有更多值得发现。", from: "zh-Hans", to: "en"))")
                     } catch { print("Translation failed: \(error.localizedDescription)"); exit(1) }
                 }
                 exit(0)

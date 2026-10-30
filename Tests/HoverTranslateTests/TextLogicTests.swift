@@ -10,9 +10,37 @@ struct CoreChecks {
         let unicode = "你好 🌿。Good design matters."
         let offset = (unicode as NSString).range(of: "design").location
         expect(TextLogic.segment(unicode, utf16Offset: offset, word: true) == "design", "中文与 emoji 不影响 UTF16 定位")
-        expect(!TextLogic.hasEnglish("你好，世界。"), "悬停时跳过纯中文")
-        expect(!TextLogic.hasEnglish("   "), "悬停时跳过空白")
-        expect(TextLogic.hasEnglish("Changes take effect after restart."), "识别英文")
+        expect(!TextLogic.isForeign("你好，世界。", native: "zh-Hans"), "母语为中文时悬停跳过中文")
+        expect(!TextLogic.isForeign("   ", native: "zh-Hans"), "悬停时跳过空白")
+        expect(TextLogic.isForeign("Changes take effect after restart.", native: "zh-Hans"), "识别英文为外语")
+        expect(TextLogic.isForeign("Keep in Dock", native: "zh-Hans"), "短英文按钮也识别为外语")
+        expect(TextLogic.isForeign("今日はとても良い天気ですね。", native: "zh-Hans"), "识别日文为外语")
+        expect(TextLogic.isForeign("Bonjour, comment allez-vous aujourd'hui ?", native: "zh-Hans"), "识别法文为外语")
+        expect(!TextLogic.isForeign("Changes take effect after restart.", native: "en"), "母语为英文时悬停跳过英文")
+        expect(TextLogic.isForeign("你好，世界。今天天气很好。", native: "en"), "母语为英文时中文是外语")
+        expect(TextLogic.language(of: "Good design makes complex things feel simple.") == "en", "英文来源检测")
+        for phrase in ["Keep in Dock", "Sign in", "Show all", "Learn more", "Open file", "Do not disturb", "Download complete",
+                       "Settings saved", "Hover text here", "Read more", "Get started", "Release notes", "Dark mode", "Open in new tab"] {
+            expect(TextLogic.language(of: phrase) == "en", "短英文不误判为其他语言：" + phrase)
+        }
+        expect(TextLogic.language(of: "今日はとても良い天気ですね。") == "ja", "假名识别为日文")
+        expect(TextLogic.language(of: "苹果・华为发布会——最新消息") == "zh-Hans", "中文里的间隔号不当作日文")
+        expect(TextLogic.language(of: "使用 iPhone 拍照") == "zh-Hans", "中英混排以中文为主")
+        expect(TextLogic.plausibleOCR("Keep in Dock"), "OCR 正常英文保留")
+        expect(TextLogic.plausibleOCR("Good design makes complex things feel simple."), "OCR 正常句子保留")
+        expect(!TextLogic.plausibleOCR("Tl rn"), "OCR 乱码丢弃")
+        expect(!TextLogic.plausibleOCR("Hxq zrwt vlmk"), "OCR 中文误读成的字母串丢弃")
+        expect(!TextLogic.plausibleOCR("·"), "OCR 无字母内容丢弃")
+        expect(TextLogic.language(of: "東京駅で待っています") == "ja", "汉字夹假名识别为日文")
+        expect(TextLogic.language(of: "안녕하세요, 만나서 반갑습니다") == "ko", "识别韩文")
+        expect(TextLogic.language(of: "Привет, как дела сегодня?") == "ru", "识别俄文")
+        expect(TextLogic.language(of: "Ich habe heute keine Zeit, weil ich arbeiten muss.") == "de", "识别德文")
+        expect(TextLogic.language(of: "La conception simple rend les choses complexes plus faciles à comprendre.") == "fr", "法文来源检测")
+        expect(TextLogic.target(for: "en", preferred: "zh-Hans", native: "zh-Hans") == "zh-Hans", "默认译成中文")
+        expect(TextLogic.target(for: "zh-Hans", preferred: "zh-Hans", native: "zh-Hans") == "en", "中文原文回退译成英文")
+        expect(TextLogic.target(for: "ja", preferred: "ja", native: "zh-Hans") == "zh-Hans", "原文已是目标语言时译成母语")
+        expect(TextLogic.target(for: "en", preferred: "fr", native: "zh-Hans") == "fr", "可设置其他目标语言")
+        expect(TextLogic.target(for: TextLogic.language(of: "你好，世界"), preferred: "zh-Hans", native: "zh-Hans") == "en", "短中文不被当作繁简互译")
         let quartz = TextLogic.quartzPoint(CGPoint(x: -400, y: 1000), desktopTop: 900)
         expect(quartz == CGPoint(x: -400, y: -100), "副屏负坐标转换")
         let cocoa = TextLogic.cocoaRect(CGRect(x: -400, y: -100, width: 100, height: 20), desktopTop: 900)
@@ -62,6 +90,13 @@ struct CoreChecks {
         expect(TextLogic.movingTowardBadge(from: origin, to: CGPoint(x: 303, y: 304), badge: nearby), "斜向接近图标保持可达")
         expect(!TextLogic.movingTowardBadge(from: origin, to: CGPoint(x: 303, y: 322), badge: nearby), "反向离开不保留图标")
         expect(!TextLogic.movingTowardBadge(from: origin, to: origin, badge: nearby), "静止不能无限延续接近状态")
+        let twoLineBlock = CGRect(x: 100, y: 300, width: 400, height: 56)
+        let blockPointer = CGPoint(x: 260, y: 328)
+        let blockBadge = TextLogic.badgeFrame(pointer: blockPointer, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: twoLineBlock)
+        expect(TextLogic.distance(blockPointer, to: blockBadge) <= 12, "两行文字块中间悬停时图标贴近鼠标")
+        let paddedLine = CGRect(x: 100, y: 300, width: 400, height: 36)
+        let paddedBadge = TextLogic.badgeFrame(pointer: CGPoint(x: 260, y: 318), visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: paddedLine)
+        expect(TextLogic.distance(CGPoint(x: 260, y: 318), to: paddedBadge) <= 24, "带留白的控件边缘较远时不贴边")
         let huge = TextLogic.badgeFrame(pointer: origin, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: CGRect(x: 0, y: 0, width: 1000, height: 800))
         expect(TextLogic.distance(origin, to: huge) < 10, "容器级边界不能把图标推远")
         let wrapped = "Previous sentence. This sentence continues across\na visual line break and ends here. Next sentence."
@@ -88,7 +123,7 @@ struct CoreChecks {
         expect(TextLogic.ocrSentence(lines: menu, hit: 0, offset: 3) == "Keep in Dock", "短菜单项不能拼成段落")
         let missing = [ocrLine("Text on the first line of a longer paragraph", 100, 100), ocrLine("Text in a distant paragraph should not join.", 100, 260)]
         expect(TextLogic.ocrSentence(lines: missing, hit: 0, offset: 10) == missing[0].text, "较大空隙不能跨越")
-        print("44 core checks passed.")
+        print("84 core checks passed.")
     }
     static func expect(_ condition: @autoclosure () -> Bool, _ name: String) {
         DiagnosticCheck.require(condition(), name)

@@ -21,5 +21,13 @@ fi
 # Remove metadata only from this newly generated bundle, immediately before signing.
 xattr -cr "$app_dir"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$project_dir/Info.plist")"
-codesign --force --sign - --identifier "$bundle_id" "$app_dir"
+# A stable local identity keeps macOS privacy grants across rebuilds; ad-hoc
+# signatures change on every build and silently invalidate them.
+signing_identity="${HOVER_TRANSLATE_SIGNING_IDENTITY:-HoverTranslate Local Signing}"
+if security find-certificate -c "$signing_identity" >/dev/null 2>&1; then
+  codesign --force --sign "$signing_identity" --identifier "$bundle_id" "$app_dir"
+else
+  print -u2 "Signing identity \"$signing_identity\" not found; falling back to ad-hoc (permissions reset each build)."
+  codesign --force --sign - --identifier "$bundle_id" "$app_dir"
+fi
 printf 'Built: %s\n' "$app_dir"

@@ -39,6 +39,8 @@ enum CaptureError: LocalizedError {
 }
 
 enum TextCapture {
+    /// The fast recognizer covers these Latin-script languages; English keeps priority.
+    static let ocrLanguages = ["en-US", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-BR"]
     static let queue = DispatchQueue(label: "io.github.kianzzz.hovertranslate.capture", qos: .userInitiated)
     static let ocrQueue = DispatchQueue(label: "io.github.kianzzz.hovertranslate.ocr", qos: .userInitiated)
 
@@ -204,13 +206,13 @@ enum TextCapture {
                 do {
                     if job.cancelled { throw CancellationError() }
                     let request = job.request
-                    // Hover detection only needs English printed text. The accurate
+                    // Hover detection reads Latin-script printed text. The accurate
                     // recognizer still initializes ANE models even with CPU assigned;
                     // the fast recognizer avoids that blocking initialization path.
                     if let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
                         request.setComputeDevice(cpu, for: .main)
                     }
-                    request.recognitionLanguages = ["en-US"]
+                    request.recognitionLanguages = TextCapture.ocrLanguages
                     request.recognitionLevel = .fast
                     request.usesLanguageCorrection = true
                     try VNImageRequestHandler(cgImage: image).perform([request])
@@ -244,7 +246,7 @@ enum TextCapture {
                     if let lineImage = image.cropping(to: pixels) {
                         let refinement = VNRecognizeTextRequest()
                         refinement.recognitionLevel = .fast
-                        refinement.recognitionLanguages = ["en-US"]
+                        refinement.recognitionLanguages = TextCapture.ocrLanguages
                         refinement.usesLanguageCorrection = true
                         if let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
                             refinement.setComputeDevice(cpu, for: .main)

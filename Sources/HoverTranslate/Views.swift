@@ -3,25 +3,52 @@ import AppKit
 import Translation
 
 enum Palette {
-    static let paper = Color(red: 0.978, green: 0.981, blue: 0.969)
-    static let sidebar = Color(red: 0.939, green: 0.950, blue: 0.927)
-    static let ink = Color(red: 0.15, green: 0.21, blue: 0.18)
-    static let secondary = Color(red: 0.46, green: 0.50, blue: 0.46)
-    static let green = Color(red: 0.20, green: 0.35, blue: 0.28)
-    static let lime = Color(red: 0.82, green: 0.93, blue: 0.65)
-    static let line = Color(red: 0.88, green: 0.90, blue: 0.86)
+    static let paper = Color(red: 0.969, green: 0.969, blue: 0.957)
+    static let sidebar = Color(red: 0.937, green: 0.941, blue: 0.925)
+    static let surface = Color.white
+    static let ink = Color(red: 0.12, green: 0.16, blue: 0.14)
+    static let secondary = Color(red: 0.45, green: 0.48, blue: 0.46)
+    static let green = Color(red: 0.18, green: 0.37, blue: 0.29)
+    static let lime = Color(red: 0.86, green: 0.93, blue: 0.86)
+    static let mint = Color(red: 0.93, green: 0.96, blue: 0.93)
+    static let line = Color(red: 0.89, green: 0.90, blue: 0.88)
 }
 
 struct SoftButton: ButtonStyle {
     var prominent = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            .padding(.horizontal, 13).padding(.vertical, 8)
             .foregroundStyle(prominent ? Color.white : Palette.ink)
-            .background(prominent ? Palette.green : Color.white.opacity(0.9))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(prominent ? Color.clear : Palette.line, lineWidth: 1))
+            .background(prominent ? Palette.green : Palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(prominent ? Color.clear : Palette.line, lineWidth: 1))
+            .shadow(color: .black.opacity(prominent ? 0.12 : 0.03), radius: prominent ? 6 : 2, y: 1)
             .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
+/// White rounded panel shared by every content section.
+struct Panel<Content: View>: View {
+    var padding: CGFloat = 22
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) { content }
+            .padding(padding).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Palette.line, lineWidth: 1))
+            .shadow(color: .black.opacity(0.035), radius: 10, y: 3)
+    }
+}
+
+struct IconTile: View {
+    let symbol: String
+    var size: CGFloat = 32
+    var body: some View {
+        Image(systemName: symbol).font(.system(size: size * 0.45, weight: .medium)).foregroundStyle(Palette.green)
+            .frame(width: size, height: size).background(Palette.mint)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
     }
 }
 
@@ -30,21 +57,25 @@ struct MainView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
+            Rectangle().fill(Palette.line).frame(width: 1)
             VStack(alignment: .leading, spacing: 0) {
-                topbar
                 ScrollView {
                     Group {
                         if model.page == "settings" { SettingsView(model: model) }
                         else if model.page == "try" { TryView(model: model) }
                         else { HomeView(model: model) }
-                    }.padding(32)
+                    }.padding(.horizontal, 40).padding(.top, 48).padding(.bottom, 32)
+                        .frame(maxWidth: 860, alignment: .leading)
                 }.scrollIndicators(.hidden)
-                HStack(spacing: 7) {
-                    Circle().fill(model.enabled ? Palette.green : Palette.secondary).frame(width: 5, height: 5)
+                HStack(spacing: 8) {
+                    Circle().fill(model.enabled ? Palette.green : Palette.secondary.opacity(0.6)).frame(width: 6, height: 6)
                     Text(model.status).font(.system(size: 11)).lineLimit(1)
                     Spacer()
-                    Text("⌃ ⌥ T  翻译选区").font(.system(size: 10, design: .monospaced))
-                }.foregroundStyle(Palette.secondary).padding(.horizontal, 32).padding(.vertical, 12)
+                    Text("⌃⌥T 翻译选区").font(.system(size: 10, weight: .medium, design: .rounded))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Palette.sidebar).clipShape(Capsule())
+                }.foregroundStyle(Palette.secondary).padding(.horizontal, 40).padding(.vertical, 12)
+                    .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
             }.background(Palette.paper)
         }
         .frame(minWidth: 1040, minHeight: 740)
@@ -54,72 +85,75 @@ struct MainView: View {
             do {
                 try await session.prepareTranslation()
                 await model.refreshLanguage()
-                model.preparationMessage = model.languageReady ? "语言包已就绪，可以开始翻译。" : "语言包仍未就绪，请重试。"
+                model.preparationMessage = "语言包已下载，可以开始翻译。"
             } catch {
                 model.preparationMessage = "准备失败：" + error.localizedDescription
                 await model.refreshLanguage()
             }
             model.preparing = false
+            model.preparingSource = nil
         }
     }
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 13).fill(Palette.green).frame(width: 42, height: 42)
-                    Image(systemName: "character.bubble.fill").font(.system(size: 21)).foregroundStyle(Palette.lime)
+            HStack(spacing: 11) {
+                Text("译").font(.system(size: 19, weight: .medium)).foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(LinearGradient(colors: [Color(red: 0.26, green: 0.47, blue: 0.37), Palette.green],
+                                               startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .shadow(color: Palette.green.opacity(0.25), radius: 6, y: 2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("浮译").font(.system(size: 19, weight: .semibold))
+                    Text("Hover Translate").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.secondary)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("浮译").font(.system(size: 23, weight: .semibold))
-                    Text("HOVER TRANSLATE").font(.system(size: 8, weight: .semibold, design: .monospaced)).tracking(1.1).foregroundStyle(Palette.secondary)
-                }
-            }.padding(.bottom, 46)
-            nav("home", "开始使用", "square.grid.2x2")
+            }.padding(.horizontal, 6).padding(.bottom, 34)
+            nav("home", "开始使用", "sparkles")
             nav("try", "翻译试用", "text.bubble")
             nav("settings", "偏好设置", "slider.horizontal.3")
             Spacer()
-            VStack(alignment: .leading, spacing: 12) {
-                Image(systemName: "leaf").font(.system(size: 22)).foregroundStyle(Palette.green)
-                Text("少一点打断，\n多一点理解。").font(.system(size: 15, weight: .medium)).lineSpacing(5)
-                Text("识别与翻译均在本机进行").font(.system(size: 10)).foregroundStyle(Palette.secondary)
-            }.padding(17).frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.6)).clipShape(RoundedRectangle(cornerRadius: 16))
-            Text("v0.3.2  /  本地原型").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.secondary).padding(.top, 20)
-        }.padding(.horizontal, 20).padding(.top, 54).padding(.bottom, 22)
-            .frame(width: 204).background(Palette.sidebar)
+            powerCard
+            Text("v0.4.0 · 本地处理").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                .padding(.top, 14).padding(.horizontal, 6)
+        }.padding(.horizontal, 14).padding(.top, 52).padding(.bottom, 20)
+            .frame(width: 212).background(Palette.sidebar)
+    }
+
+    private var powerCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("全局翻译").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Toggle("全局翻译", isOn: Binding(get: { model.enabled }, set: { _ in model.toggleEnabled() }))
+                    .toggleStyle(.switch).labelsHidden().tint(Palette.green).controlSize(.mini)
+            }
+            Text(model.enabled ? "悬停外语、选中文字即可翻译" : "已暂停，不会读取屏幕文字")
+                .font(.system(size: 10)).foregroundStyle(Palette.secondary).lineSpacing(2)
+            HStack(spacing: 6) {
+                Text("母语 " + TextLogic.displayName(model.nativeLanguage))
+                Text("·")
+                Text("译成 " + TextLogic.displayName(model.targetLanguage))
+            }.font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.green)
+        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.surface).clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Palette.line, lineWidth: 1))
     }
 
     private func nav(_ id: String, _ title: String, _ symbol: String) -> some View {
-        Button { model.page = id } label: {
-            HStack(spacing: 11) {
-                Image(systemName: symbol).font(.system(size: 14)).frame(width: 20)
-                Text(title).font(.system(size: 13, weight: model.page == id ? .semibold : .regular))
+        let active = model.page == id
+        return Button { model.page = id } label: {
+            HStack(spacing: 10) {
+                Image(systemName: symbol).font(.system(size: 13, weight: .medium)).frame(width: 18)
+                    .foregroundStyle(active ? Palette.green : Palette.secondary)
+                Text(title).font(.system(size: 13, weight: active ? .semibold : .regular))
                 Spacer()
-                if model.page == id { Circle().fill(Palette.green).frame(width: 5, height: 5) }
-            }.padding(.horizontal, 12).padding(.vertical, 13)
-                .background(model.page == id ? Color.white : Color.clear).clipShape(RoundedRectangle(cornerRadius: 10))
-        }.buttonStyle(.plain).padding(.bottom, 6)
-    }
-
-    private var topbar: some View {
-        HStack {
-            HStack(spacing: 6) {
-                Image(systemName: "lock.shield").font(.system(size: 11))
-                Text("本机处理 · 切换由你触发").font(.system(size: 11))
-            }.foregroundStyle(Palette.secondary)
-            Spacer()
-            Button { model.toggleEnabled() } label: {
-                HStack(spacing: 9) {
-                    Circle().fill(model.enabled ? Palette.green : Palette.secondary).frame(width: 6, height: 6)
-                    Text(model.enabled ? "全局翻译已开启" : "开启全局翻译").font(.system(size: 12, weight: .medium))
-                    Image(systemName: "power").font(.system(size: 12))
-                }.padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(model.enabled ? Palette.lime : Color.white)
-                    .clipShape(Capsule()).overlay(Capsule().stroke(Palette.line, lineWidth: 1))
-            }.buttonStyle(.plain)
-        }.padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 17)
-            .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+            }.padding(.horizontal, 10).padding(.vertical, 9)
+                .background(active ? Palette.surface : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .shadow(color: .black.opacity(active ? 0.05 : 0), radius: 3, y: 1)
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).padding(.bottom, 3)
     }
 }
 
@@ -128,9 +162,9 @@ struct SectionHeading: View {
     let title: String
     let subtitle: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(eyebrow).font(.system(size: 10, weight: .semibold, design: .monospaced)).tracking(2).foregroundStyle(Palette.green)
-            Text(title).font(.system(size: 34, weight: .semibold)).tracking(-1)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(eyebrow).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.green)
+            Text(title).font(.system(size: 30, weight: .bold)).tracking(-0.6)
             Text(subtitle).font(.system(size: 13)).foregroundStyle(Palette.secondary).lineSpacing(4)
         }
     }
@@ -139,83 +173,83 @@ struct SectionHeading: View {
 struct HomeView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            SectionHeading(eyebrow: "A LITTLE PAUSE. A LITTLE CLARITY.", title: "停一下，就读懂。", subtitle: "鼠标悬停看中文，选中文字自由切换语言。")
+        VStack(alignment: .leading, spacing: 22) {
+            SectionHeading(eyebrow: "开始使用", title: "停一下，就读懂。",
+                           subtitle: "悬停外语出现“译”图标，选中任意文字也能翻译。原文语种自动识别，默认译成\(TextLogic.displayName(model.targetLanguage))。")
             HStack(alignment: .top, spacing: 18) {
                 browserPreview
-                VStack(alignment: .leading, spacing: 22) {
-                    Label("轻一点的阅读方式", systemImage: "cursorarrow.rays").font(.system(size: 13, weight: .semibold))
-                    step("01", "发现", "鼠标在英文上停留，出现小“译”图标。")
-                    step("02", "移入", "鼠标移到图标，自动展开译文，无需点击。")
-                    step("03", "继续", "移开后收起；移入浮窗可继续阅读。")
+                VStack(alignment: .leading, spacing: 20) {
+                    step("1", "悬停外语", "停留片刻出现“译”图标；\(TextLogic.displayName(model.nativeLanguage))文字不打扰。")
+                    step("2", "选中文字", "任何语言选中后都会出现图标。")
+                    step("3", "移入图标", "自动展开原文与译文，无需点击。")
                     Spacer(minLength: 0)
                     Button { model.page = "try" } label: {
-                        HStack { Text("试试自己的文字"); Image(systemName: "arrow.up.right") }
+                        HStack(spacing: 6) { Text("试试自己的文字"); Image(systemName: "arrow.right") }
                     }.buttonStyle(SoftButton(prominent: true))
-                }.padding(.vertical, 18).frame(width: 204, alignment: .leading)
+                }.padding(.vertical, 6).frame(width: 214, alignment: .leading)
             }
             HStack(spacing: 14) {
-                feature("cursorarrow", "移入图标看译文", "无需选中，也无需点击")
-                feature("text.cursor", "选区双向翻译", "输入框先看译文，再决定是否替换")
-                feature("pin", "固定与复制", "长内容慢慢读，译文随手用")
+                feature("globe", "多语种原文", "自动识别英、日、韩、法、德等语言")
+                feature("text.cursor", "选区翻译与替换", "输入框先看译文，再决定是否替换")
+                feature("lock", "全部本机完成", "离线翻译，不上传文字与截图")
             }
-            HStack(spacing: 12) {
-                Image(systemName: ready ? "checkmark.seal.fill" : "sparkle").foregroundStyle(Palette.green).font(.system(size: 22))
+            HStack(spacing: 14) {
+                IconTile(symbol: ready ? "checkmark.seal.fill" : "exclamationmark.triangle", size: 36)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(ready ? "取词与识图均已就绪" : "覆盖范围受限 · 请完成权限准备").font(.system(size: 13, weight: .medium))
-                    Text("辅助功能：\(model.accessibility ? "已授权" : "待授权")   ·   语言包：\(model.languageReady ? "已就绪" : "待准备")   ·   识图：\(model.screenPermission ? "已授权" : "系统选项 / 图片需要授权")")
+                    Text(ready ? "取词、识图与语言包均已就绪" : "还差一步 · 完成权限与语言包准备").font(.system(size: 13, weight: .semibold))
+                    Text("取词 \(model.accessibility ? "已授权" : "待授权")  ·  识图 \(model.screenPermission ? "已授权" : "待授权")  ·  语言包 \(model.languageReady ? "已就绪" : "待下载")")
                         .font(.system(size: 11)).foregroundStyle(Palette.secondary)
                 }
                 Spacer()
                 Button("检查设置") { model.page = "settings" }.buttonStyle(SoftButton())
-            }.padding(18).background(Palette.sidebar).clipShape(RoundedRectangle(cornerRadius: 14))
+            }.padding(16).background(Palette.sidebar.opacity(0.7))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
     private var ready: Bool { model.accessibility && model.languageReady && model.screenPermission && model.ocrEnabled }
 
     private var browserPreview: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 5) {
-                ForEach([Color(red: 0.91, green: 0.62, blue: 0.56), Color(red: 0.92, green: 0.79, blue: 0.49), Color(red: 0.63, green: 0.77, blue: 0.57)], id: \.self) { color in
-                    Circle().fill(color).frame(width: 7, height: 7)
+            HStack(spacing: 6) {
+                ForEach([Color(red: 1.0, green: 0.37, blue: 0.34), Color(red: 1.0, green: 0.74, blue: 0.18), Color(red: 0.16, green: 0.79, blue: 0.25)], id: \.self) { color in
+                    Circle().fill(color.opacity(0.85)).frame(width: 9, height: 9)
                 }
                 Spacer()
-                Text("交互预览").font(.system(size: 10)).foregroundStyle(Palette.secondary)
-            }.padding(.horizontal, 18).padding(.vertical, 13).background(Palette.sidebar.opacity(0.6))
-            VStack(alignment: .leading, spacing: 17) {
-                Text("THE QUIET INTERNET").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1.8).foregroundStyle(Palette.secondary)
-                Text("Read without breaking\nyour flow.").font(.system(size: 25, weight: .medium, design: .serif)).lineSpacing(2)
+                Text("交互预览").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.secondary)
+            }.padding(.horizontal, 16).padding(.vertical, 11)
+                .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+            VStack(alignment: .leading, spacing: 14) {
+                Text("THE QUIET INTERNET").font(.system(size: 9, weight: .semibold)).tracking(1.6).foregroundStyle(Palette.secondary)
+                Text("Read without breaking\nyour flow.").font(.system(size: 24, weight: .semibold, design: .serif)).lineSpacing(1)
                 DemoSentence(model: model, english: "Good design makes complex things feel simple.")
                 DemoSentence(model: model, english: "Stay curious. There is always more to discover.")
                 HStack(spacing: 5) {
-                    Image(systemName: "cursorarrow").font(.system(size: 10))
-                    Text("悬停英文后，移到“译”图标查看译文").font(.system(size: 10))
-                }.foregroundStyle(Palette.green).padding(.top, 3)
-                Text("这里使用本机真实翻译，无需开启全局权限即可试用。")
-                    .font(.system(size: 9)).foregroundStyle(Palette.secondary)
-            }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-        }.background(Color.white).clipShape(RoundedRectangle(cornerRadius: 17))
-            .overlay(RoundedRectangle(cornerRadius: 17).stroke(Palette.line, lineWidth: 1))
+                    Image(systemName: "cursorarrow.rays").font(.system(size: 10))
+                    Text("悬停上面的句子，再移到“译”图标").font(.system(size: 10, weight: .medium))
+                }.foregroundStyle(Palette.green).padding(.top, 2)
+            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+        }.background(Palette.surface).clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Palette.line, lineWidth: 1))
+            .shadow(color: .black.opacity(0.04), radius: 12, y: 4)
     }
 
     private func step(_ n: String, _ title: String, _ text: String) -> some View {
         HStack(alignment: .top, spacing: 11) {
-            Text(n).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Palette.green).padding(.top, 3)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.system(size: 14, weight: .medium))
+            Text(n).font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Palette.green)
+                .frame(width: 22, height: 22).background(Palette.mint).clipShape(Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 13, weight: .semibold))
                 Text(text).font(.system(size: 11)).foregroundStyle(Palette.secondary).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
     private func feature(_ symbol: String, _ title: String, _ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Image(systemName: symbol).font(.system(size: 16)).foregroundStyle(Palette.green)
-            Text(title).font(.system(size: 13, weight: .semibold))
-            Text(text).font(.system(size: 10)).foregroundStyle(Palette.secondary)
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white).clipShape(RoundedRectangle(cornerRadius: 13))
-            .overlay(RoundedRectangle(cornerRadius: 13).stroke(Palette.line, lineWidth: 1))
+        Panel(padding: 16) {
+            IconTile(symbol: symbol, size: 30).padding(.bottom, 12)
+            Text(title).font(.system(size: 13, weight: .semibold)).padding(.bottom, 4)
+            Text(text).font(.system(size: 11)).foregroundStyle(Palette.secondary)
+        }
     }
 }
 
@@ -328,37 +362,38 @@ struct HoverBadgeView: View {
 struct TryView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            SectionHeading(eyebrow: "TRY YOUR OWN WORDS", title: "把语言切换一下。", subtitle: "输入或粘贴一段中英文。浮窗显示译文，输入的原文保持不变。")
-            VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 22) {
+            SectionHeading(eyebrow: "翻译试用", title: "输入任意语言试试。",
+                           subtitle: "自动识别原文语种，浮窗只显示原文和译文，输入的内容保持不变。")
+            Panel {
                 HStack {
-                    Label("原文", systemImage: "text.alignleft").font(.system(size: 13, weight: .semibold))
+                    Text("原文").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Text("\(model.manualText.count) / 8,000").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.secondary)
-                }
-                TextEditor(text: $model.manualText).font(.system(size: 17)).lineSpacing(6)
-                    .scrollContentBackground(.hidden).padding(14).frame(height: 210)
-                    .background(Palette.paper).clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line, lineWidth: 1))
+                    Text("\(model.manualText.count) / 8,000").font(.system(size: 11, design: .rounded)).foregroundStyle(Palette.secondary)
+                }.padding(.bottom, 12)
+                TextEditor(text: $model.manualText).font(.system(size: 16)).lineSpacing(6)
+                    .scrollContentBackground(.hidden).padding(14).frame(height: 200)
+                    .background(Palette.paper).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line, lineWidth: 1))
                     .accessibilityLabel("要翻译的原文")
                 HStack {
-                    Text("Apple 本机翻译 · \(model.languageStatus)").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                    Text("Apple 本机翻译 · 译成\(TextLogic.displayName(model.targetLanguage))").font(.system(size: 11)).foregroundStyle(Palette.secondary)
                     Spacer()
                     Button { model.manualTranslate() } label: { Label("打开翻译浮窗", systemImage: "arrow.up.right") }
                         .buttonStyle(SoftButton(prominent: true)).disabled(TextLogic.clean(model.manualText).isEmpty)
-                }
-            }.padding(22).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 17))
-                .overlay(RoundedRectangle(cornerRadius: 17).stroke(Palette.line, lineWidth: 1))
+                }.padding(.top, 14)
+            }
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "text.cursor").font(.system(size: 23)).foregroundStyle(Palette.green)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("在其他应用里试试选区翻译").font(.system(size: 14, weight: .semibold))
-                    Text("开启全局翻译后，选中文字会打开译文浮窗。选择中文或英文查看结果；可编辑输入框还可点击“替换选中文字”，再在原输入框按 ⌘Z 撤销。也可以选中后按 ⌃ ⌥ T。")
-                        .font(.system(size: 12)).foregroundStyle(Palette.secondary).lineSpacing(5)
+                IconTile(symbol: "text.cursor", size: 34)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("在其他应用里试试选区翻译").font(.system(size: 13, weight: .semibold))
+                    Text("开启全局翻译后，选中文字会出现“译”图标，鼠标移入即展开译文；可编辑输入框还可点击“替换选中文字”，再按 ⌘Z 撤销。也可以选中后按 ⌃⌥T 直接打开。")
+                        .font(.system(size: 12)).foregroundStyle(Palette.secondary).lineSpacing(4)
                     Text("应用未开放选区时：复制文字 → 菜单栏“翻译剪贴板”。")
                         .font(.system(size: 11)).foregroundStyle(Palette.secondary)
                 }
-            }.padding(22).frame(maxWidth: .infinity, alignment: .leading).background(Palette.sidebar).clipShape(RoundedRectangle(cornerRadius: 15))
+            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Palette.sidebar.opacity(0.7)).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 }
@@ -366,213 +401,292 @@ struct TryView: View {
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            SectionHeading(eyebrow: "MAKE IT FEEL RIGHT", title: "按你的节奏来。", subtitle: "先准备语言包，再授权全局取词。随时可以从菜单栏暂停。")
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("运行准备").font(.system(size: 14, weight: .semibold))
-                    Spacer()
-                    Button("重新检测") { model.recheckPermissions() }.buttonStyle(SoftButton())
-                }.padding(.bottom, 16)
-                permission("accessibility", "设备控制与数据访问 / 辅助功能", model.accessibility ? "当前运行版本已获得系统取词权限。" : "当前运行版本未就绪；请确认授权的是此处的“浮译”。", model.accessibility, "打开权限设置") { model.requestAccessibility() }
-                Divider().padding(.vertical, 14)
-                permission("viewfinder", "屏幕录制 · 扩展识别范围", "识别图片、系统界面和无法直接取词的文字，仅截取鼠标附近。", model.screenPermission, "前往授权") { model.requestScreen() }
-                if !model.accessibility || !model.screenPermission {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(model.accessibility ? "找不到浮译？" : "开关已开启，却仍未就绪？").font(.system(size: 12, weight: .semibold))
-                        if !model.accessibility {
-                            Text("旧版本或内部测试包的授权可能没有对当前版本生效。请移除旧条目，按下面的路径重新添加“浮译”，再返回这里点“重新检测”。")
-                                .font(.system(size: 11)).lineSpacing(4)
-                        }
-                        Text("在系统权限页点“添加 / +”后，按 ⇧⌘G，粘贴下面的应用路径，按回车，再点“打开”。随后开启“浮译”；如果系统要求，退出并重新打开浮译。")
-                            .font(.system(size: 11)).lineSpacing(4)
-                        Text(model.applicationPath).font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
-                        HStack {
-                            Button("复制应用路径") { model.copyApplicationPath() }.buttonStyle(SoftButton())
-                            Button("在访达中显示浮译") { model.revealApplication() }.buttonStyle(SoftButton())
-                        }
-                        Text("浮译位于个人“应用程序”目录，系统添加窗口默认可能打开另一个“应用程序”目录。")
-                            .font(.system(size: 10)).foregroundStyle(Palette.secondary)
-                    }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Palette.paper).clipShape(RoundedRectangle(cornerRadius: 10)).padding(.top, 12)
+        VStack(alignment: .leading, spacing: 20) {
+            SectionHeading(eyebrow: "偏好设置", title: "按你的习惯来。", subtitle: "设置母语和译文语言，再授权全局取词。随时可以从菜单栏暂停。")
+            Panel {
+                cardTitle("语言")
+                row("person.wave.2", "母语", "悬停时不为母语文字显示图标；选中母语文字仍可翻译。") {
+                    languagePicker("母语", $model.nativeLanguage)
                 }
                 Divider().padding(.vertical, 14)
-                permission("character.bubble", "中英文语言包", model.languageStatus, model.languageReady, model.preparing ? "准备中…" : "准备语言包") { model.prepareLanguage() }
-                if !model.preparationMessage.isEmpty {
-                    Text(model.preparationMessage).font(.system(size: 11)).foregroundStyle(Palette.secondary).padding(.top, 12)
+                row("character.bubble", "译成", "原文语种自动识别。原文已是该语言时，改译成母语或英文。") {
+                    languagePicker("译成", $model.targetLanguage)
                 }
-            }.padding(22).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Palette.line, lineWidth: 1))
-            VStack(alignment: .leading, spacing: 17) {
-                Text("触发与识别").font(.system(size: 14, weight: .semibold))
-                settingToggle("悬停翻译", "先出现“译”图标，鼠标移入图标后展开译文，无需点击。", $model.hoverEnabled)
-                settingToggle("选中文字后显示翻译工具", "统一显示译文浮窗；可编辑输入框提供替换按钮。", $model.selectionEnabled)
-                settingToggle("允许本机 OCR 补充识别", "需要屏幕录制权限；识别范围限于鼠标附近。", $model.ocrEnabled)
-                Divider()
+                Divider().padding(.vertical, 14)
+                row("arrow.down.circle", "语言包", "把各语种译成\(TextLogic.displayName(model.targetLanguage))需要先下载对应的离线语言包。") {
+                    Button("在系统设置中下载") { model.openSystemTranslationSettings() }.buttonStyle(SoftButton())
+                }
+                packPicker.padding(.top, 14).padding(.leading, 45)
+                Text(model.preparationMessage.isEmpty ? "系统设置 → 通用 → 语言与地区 → 翻译语言，可查看下载进度。" : model.preparationMessage)
+                    .font(.system(size: 10)).foregroundStyle(Palette.secondary).lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 10).padding(.leading, 45)
+            }
+            Panel {
                 HStack {
-                    Text("图标出现等待").font(.system(size: 12))
-                    Slider(value: $model.delay, in: 0.3...1.5, step: 0.1).tint(Palette.green).frame(maxWidth: 250)
-                    Text("\(Int(model.delay * 1000)) ms").font(.system(size: 11, design: .monospaced)).frame(width: 65)
+                    cardTitle("运行准备")
                     Spacer()
+                    Button("重新检测") { model.recheckPermissions() }.buttonStyle(SoftButton()).padding(.bottom, 16)
                 }
-                HStack {
-                    Text("移开后关闭").font(.system(size: 12))
-                    Slider(value: $model.closeDelay, in: 0...1, step: 0.05).tint(Palette.green).frame(maxWidth: 250)
+                row("hand.point.up.left", "设备控制与数据访问 / 辅助功能", model.accessibility ? "当前运行版本已获得系统取词权限。" : "当前运行版本未就绪；请确认授权的是此处的“浮译”。") {
+                    if model.accessibility { readyLabel } else { Button("打开权限设置") { model.requestAccessibility() }.buttonStyle(SoftButton()) }
+                }
+                Divider().padding(.vertical, 14)
+                row("viewfinder", "屏幕录制 · 扩展识别范围", "识别图片、系统界面和无法直接取词的文字，仅截取鼠标附近。") {
+                    if model.screenPermission { readyLabel } else { Button("前往授权") { model.requestScreen() }.buttonStyle(SoftButton()) }
+                }
+                if !model.accessibility || !model.screenPermission { permissionHelp }
+            }
+            Panel {
+                cardTitle("触发与识别")
+                toggleRow("cursorarrow.rays", "悬停翻译", "悬停外语先出现“译”图标，移入图标后展开译文。", $model.hoverEnabled)
+                Divider().padding(.vertical, 14)
+                toggleRow("text.cursor", "选中文字后显示图标", "移入图标打开译文；可编辑输入框提供替换按钮。", $model.selectionEnabled)
+                Divider().padding(.vertical, 14)
+                toggleRow("text.viewfinder", "允许本机 OCR 补充识别", "需要屏幕录制权限；识别范围限于鼠标附近。", $model.ocrEnabled)
+                Divider().padding(.vertical, 14)
+                row("timer", "图标出现等待", "鼠标停留多久后出现“译”图标。") {
+                    slider($model.delay, 0.3...1.5, 0.1, "\(Int(model.delay * 1000)) ms")
+                }
+                Divider().padding(.vertical, 14)
+                row("xmark.circle", "移开后关闭", "适用于悬停译文；选区浮窗保留至点击外部或关闭。") {
+                    slider($model.closeDelay, 0...1, 0.05, model.closeDelay == 0 ? "立即" : "\(Int((model.closeDelay * 1000).rounded())) ms")
                         .accessibilityLabel("移开后关闭等待时间")
-                    Text(model.closeDelay == 0 ? "立即关闭" : "\(Int((model.closeDelay * 1000).rounded())) ms")
-                        .font(.system(size: 11, design: .monospaced)).frame(width: 65)
-                    Spacer()
-                    Button("立即关闭") { model.closeDelay = 0 }.buttonStyle(SoftButton())
                 }
-                Text("此设置适用于悬停译文。选区工具保留至点击外部或关闭；固定浮窗不受此设置影响。")
-                    .font(.system(size: 10)).foregroundStyle(Palette.secondary)
-                HStack {
-                    Text("识别范围").font(.system(size: 12))
+                Divider().padding(.vertical, 14)
+                row("text.word.spacing", "识别范围", "优先识别完整句子；OCR 会按行距与对齐合并同段内容。") {
                     Picker("识别范围", selection: $model.wordMode) {
-                        Text("句子 / 短语").tag(false)
+                        Text("句子").tag(false)
                         Text("单词").tag(true)
-                    }.pickerStyle(.segmented).labelsHidden().frame(width: 235)
-                    Spacer()
+                    }.pickerStyle(.segmented).labelsHidden().frame(width: 140)
                 }
-                Text("优先识别完整句子；OCR 会按行距与对齐合并同段内容，屏幕外文字无法识别。")
-                    .font(.system(size: 10)).foregroundStyle(Palette.secondary)
-            }.padding(22).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Palette.line, lineWidth: 1))
-            Text("不自动读取剪贴板，不记录翻译历史，不上传截图或文字。关闭窗口后仍可从菜单栏使用；退出可按 ⌘ Q。")
+            }
+            Text("不自动读取剪贴板，不记录翻译历史，不上传截图或文字。关闭窗口后仍可从菜单栏使用；退出可按 ⌘Q。")
                 .font(.system(size: 11)).foregroundStyle(Palette.secondary).lineSpacing(4)
-        }.onAppear { model.refreshPermissions() }
+        }.onAppear { model.refreshPermissions(); Task { await model.refreshLanguage() } }
     }
 
-    private func permission(_ icon: String, _ title: String, _ description: String, _ ready: Bool, _ actionTitle: String, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 13) {
-            Image(systemName: icon).font(.system(size: 19)).foregroundStyle(Palette.green).frame(width: 28)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.system(size: 12, weight: .semibold))
-                Text(description).font(.system(size: 11)).foregroundStyle(Palette.secondary)
+    private var packLanguages: [String] {
+        TextLogic.languages.map(\.id).filter { !TextLogic.sameLanguage($0, model.targetLanguage) }
+    }
+
+    /// One menu instead of a wall of chips: pick a language, see its status, act on it.
+    private var packPicker: some View {
+        let id = packLanguages.contains(model.selectedPack) ? model.selectedPack : (packLanguages.first ?? "en")
+        let status = model.packStatus[id]
+        let installed = packLanguages.filter { model.packStatus[$0] == .installed }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                languagePicker("语种", Binding(get: { id }, set: { model.selectedPack = $0 }), options: packLanguages)
+                if status == .installed {
+                    Label("已下载", systemImage: "checkmark.circle.fill").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.green)
+                } else if status == .unsupported {
+                    Text("本机翻译不支持").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                } else if status == nil {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button(model.preparing && model.preparingSource == id ? "下载中…" : "下载") {
+                        model.prepareLanguage(source: id, target: model.targetLanguage)
+                    }.buttonStyle(SoftButton()).disabled(model.preparing)
+                }
+                Button { Task { await model.refreshLanguage() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).foregroundStyle(Palette.secondary).help("重新检查语言包")
             }
-            Spacer(minLength: 10)
-            if ready { Label("已就绪", systemImage: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(Palette.green) }
-            else { Button(actionTitle, action: action).buttonStyle(SoftButton()).disabled(title == "中英文语言包" && model.preparing) }
+            Text(installed.isEmpty ? "还没有已下载的语种。" : "已下载：" + installed.map(TextLogic.displayName).joined(separator: "、"))
+                .font(.system(size: 11)).foregroundStyle(Palette.secondary)
         }
     }
 
-    private func settingToggle(_ title: String, _ subtitle: String, _ value: Binding<Bool>) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 12, weight: .medium))
-                Text(subtitle).font(.system(size: 10)).foregroundStyle(Palette.secondary)
+    private var readyLabel: some View {
+        Label("已就绪", systemImage: "checkmark.circle.fill").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.green)
+    }
+
+    private var permissionHelp: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(model.accessibility ? "找不到浮译？" : "开关已开启，却仍未就绪？").font(.system(size: 12, weight: .semibold))
+            if !model.accessibility {
+                Text("旧版本或内部测试包的授权可能没有对当前版本生效。请移除旧条目，按下面的路径重新添加“浮译”，再返回这里点“重新检测”。")
+                    .font(.system(size: 11)).lineSpacing(3)
             }
-            Spacer()
+            Text("在系统权限页点“添加 / +”后，按 ⇧⌘G，粘贴下面的应用路径，按回车，再点“打开”。随后开启“浮译”；如果系统要求，退出并重新打开浮译。")
+                .font(.system(size: 11)).lineSpacing(3)
+            Text(model.applicationPath).font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+            HStack {
+                Button("复制应用路径") { model.copyApplicationPath() }.buttonStyle(SoftButton())
+                Button("在访达中显示浮译") { model.revealApplication() }.buttonStyle(SoftButton())
+            }
+            Text("浮译位于个人“应用程序”目录，系统添加窗口默认可能打开另一个“应用程序”目录。")
+                .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.paper).clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous)).padding(.top, 14)
+    }
+
+    private func cardTitle(_ title: String) -> some View {
+        Text(title).font(.system(size: 14, weight: .semibold)).padding(.bottom, 16)
+    }
+
+    private func row<Control: View>(_ icon: String, _ title: String, _ subtitle: String, @ViewBuilder control: () -> Control) -> some View {
+        HStack(spacing: 13) {
+            IconTile(symbol: icon)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 12.5, weight: .semibold))
+                Text(subtitle).font(.system(size: 11)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 16)
+            control()
+        }
+    }
+
+    private func toggleRow(_ icon: String, _ title: String, _ subtitle: String, _ value: Binding<Bool>) -> some View {
+        row(icon, title, subtitle) {
             Toggle(title, isOn: value).toggleStyle(.switch).labelsHidden().tint(Palette.green).controlSize(.small)
+        }
+    }
+
+    private func languagePicker(_ title: String, _ selection: Binding<String>, options: [String]? = nil) -> some View {
+        DropdownMenu(title: title, selection: selection, options: options ?? TextLogic.languages.map(\.id))
+    }
+
+    private func slider(_ value: Binding<Double>, _ range: ClosedRange<Double>, _ step: Double, _ label: String) -> some View {
+        HStack(spacing: 10) {
+            Slider(value: value, in: range, step: step).tint(Palette.green).frame(width: 170)
+            Text(label).font(.system(size: 11, design: .rounded)).foregroundStyle(Palette.secondary).frame(width: 52, alignment: .trailing)
         }
     }
 }
 
+/// A pull-down that always opens below its field, unlike a pop-up picker
+/// which covers the field with the selected row.
+struct DropdownMenu: View {
+    let title: String
+    @Binding var selection: String
+    let options: [String]
+    private func label(_ id: String) -> String {
+        TextLogic.displayName(id) + "  " + (TextLogic.languages.first { $0.id == id }?.name ?? id)
+    }
+    var body: some View {
+        Menu {
+            Picker(title, selection: $selection) {
+                ForEach(options, id: \.self) { Text(label($0)).tag($0) }
+            }.pickerStyle(.inline).labelsHidden()
+        } label: {
+            HStack {
+                Text(label(selection)).font(.system(size: 12)).lineLimit(1)
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.secondary)
+            }.padding(.horizontal, 11).frame(width: 190, height: 28)
+                .background(Palette.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Palette.line, lineWidth: 1))
+                .contentShape(Rectangle())
+        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel(title)
+    }
+}
+
 private enum MistCardPalette {
-    static let ink = Color(red: 0.21, green: 0.25, blue: 0.22)
-    static let secondary = Color(red: 0.56, green: 0.60, blue: 0.57)
-    static let accent = Color(red: 0.38, green: 0.48, blue: 0.37)
-    static let selected = Color(red: 0.92, green: 0.95, blue: 0.90)
+    static let ink = Color(red: 0.13, green: 0.16, blue: 0.14)
+    static let secondary = Color(red: 0.47, green: 0.51, blue: 0.48)
+    static let accent = Color(red: 0.20, green: 0.40, blue: 0.31)
+    static let selected = Color(red: 0.90, green: 0.95, blue: 0.91)
 }
 
 struct TranslationCard: View {
     @ObservedObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 7) {
-                Text("译").font(.system(size: 12, weight: .medium)).foregroundStyle(MistCardPalette.accent)
-                    .frame(width: 16).help("浮译")
-                HStack(spacing: 2) {
-                    tab("原文", "original")
-                    tab("中文", "zh-Hans")
-                    tab("EN", "en")
-                }
+            HStack(spacing: 6) {
+                Text("译").font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 17, height: 17).background(MistCardPalette.accent).clipShape(Circle())
+                Text("\(TextLogic.displayName(model.sourceLanguage)) → \(TextLogic.displayName(model.target))")
+                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(MistCardPalette.secondary).lineLimit(1)
                 Spacer(minLength: 4)
-                HStack(spacing: 2) {
+                HStack(spacing: 1) {
                     tool(model.pinned ? "pin.fill" : "pin", help: model.pinned ? "取消固定" : "固定浮窗",
                          active: model.pinned) { model.pinned.toggle() }
                     tool(model.copied ? "checkmark" : "doc.on.doc", help: model.copied ? "已复制" : "复制译文",
                          active: model.copied) { model.copyResult() }.disabled(model.phase != .result)
                     tool("xmark", help: "关闭浮窗") { model.dismiss(force: true) }
                 }
-            }.padding(.leading, 10).padding(.trailing, 8).frame(height: CardLayout.headerHeight)
-            VStack(alignment: .leading, spacing: 4) {
-                if model.showsCardSource {
-                    Text(model.source).font(.system(size: 11)).lineLimit(1).truncationMode(.tail)
-                        .foregroundStyle(MistCardPalette.secondary).frame(height: 16, alignment: .leading)
-                        .help(model.source)
-                }
-                Group {
-                    if model.phase == .choose {
-                        Text("选择上方语言查看译文").font(.system(size: 12)).foregroundStyle(MistCardPalette.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if model.phase == .loading {
-                        HStack(spacing: 7) {
-                            ProgressView().controlSize(.mini)
-                            Text("正在本机翻译…").font(.system(size: 12)).foregroundStyle(MistCardPalette.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(model.result).font(.system(size: CardLayout.translationFontSize, weight: .regular))
-                                    .lineSpacing(3).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if model.phase == .failure {
-                                    Button("打开设置") { model.dismiss(force: true); model.settings() }
-                                        .font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(MistCardPalette.accent)
+            }.padding(.leading, 14).padding(.trailing, 8).frame(height: CardLayout.headerHeight)
+            Text(model.source).font(.system(size: CardLayout.sourceFontSize)).lineSpacing(2)
+                .lineLimit(CardLayout.sourceLineLimit).truncationMode(.tail)
+                .foregroundStyle(MistCardPalette.secondary).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: model.cardSourceHeight, alignment: .topLeading)
+                .padding(.horizontal, 16).help(model.source)
+            Rectangle().fill(MistCardPalette.secondary.opacity(0.14)).frame(height: 1)
+                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 9)
+            Group {
+                if model.phase == .loading || model.phase == .idle {
+                    HStack(spacing: 7) {
+                        ProgressView().controlSize(.mini)
+                        Text("正在本机翻译…").font(.system(size: 12)).foregroundStyle(MistCardPalette.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(model.result).font(.system(size: CardLayout.translationFontSize, weight: model.phase == .failure ? .regular : .medium))
+                                .foregroundStyle(model.phase == .failure ? MistCardPalette.secondary : MistCardPalette.ink)
+                                .lineSpacing(3).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if model.phase == .failure {
+                                if model.missingPack != nil {
+                                    Button("下载语言包") { model.downloadMissingPack() }.buttonStyle(CardButton())
+                                } else {
+                                    Button("打开设置") { model.dismiss(force: true); model.settings() }.buttonStyle(CardButton())
                                 }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                        }.scrollIndicators(.automatic)
-                    }
-                }.frame(height: model.cardBodyHeight, alignment: .topLeading)
-            }.padding(.horizontal, 12).padding(.top, 3).padding(.bottom, 11)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.scrollIndicators(.automatic)
+                }
+            }.frame(height: model.cardBodyHeight, alignment: .topLeading).padding(.horizontal, 16).padding(.bottom, 14)
             if model.showsReplacementControls {
                 VStack(alignment: .leading, spacing: 0) {
-                    Rectangle().fill(MistCardPalette.secondary.opacity(0.15)).frame(height: 1)
+                    Rectangle().fill(MistCardPalette.secondary.opacity(0.14)).frame(height: 1)
                     HStack(spacing: 8) {
-                        Text("⌘Z 撤销").font(.system(size: 9)).foregroundStyle(MistCardPalette.secondary)
+                        Text("替换后可按 ⌘Z 撤销").font(.system(size: 10)).foregroundStyle(MistCardPalette.secondary)
                         Spacer(minLength: 4)
                         Button { model.replaceSelection() } label: {
                             HStack(spacing: 4) {
                                 if model.isReplacing { ProgressView().controlSize(.mini) }
                                 Text(model.isReplacing ? "正在替换…" : "替换选中文字")
-                            }.font(.system(size: 10, weight: .medium))
-                                .padding(.horizontal, 9).padding(.vertical, 5)
-                                .background(MistCardPalette.selected).clipShape(RoundedRectangle(cornerRadius: 6))
-                        }.buttonStyle(.plain).disabled(!model.canReplaceSelection)
+                            }
+                        }.buttonStyle(CardButton(prominent: true)).disabled(!model.canReplaceSelection)
                             .opacity(model.canReplaceSelection || model.isReplacing ? 1 : 0.45)
                             .accessibilityLabel("替换选中文字")
-                    }.padding(.horizontal, 12).frame(height: 33)
+                    }.padding(.horizontal, 14).frame(height: 37)
                     if !model.replacementMessage.isEmpty {
                         Text(model.replacementMessage).font(.system(size: 10)).lineLimit(2)
                             .foregroundStyle(MistCardPalette.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading).frame(height: 30, alignment: .top)
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 14)
                     }
-                }
+                }.background(MistCardPalette.selected.opacity(0.35))
             }
         }.frame(width: model.cardWidth, height: model.cardHeight, alignment: .top)
-            .background(Color.white.opacity(0.86))
-            .clipShape(RoundedRectangle(cornerRadius: 11))
-            .overlay(RoundedRectangle(cornerRadius: 11).stroke(Color.white.opacity(0.95), lineWidth: 1))
+            .background(Color.white.opacity(0.88))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
             .preferredColorScheme(.light).foregroundStyle(MistCardPalette.ink)
             .onExitCommand { model.dismiss(force: true) }
     }
 
-    private func tab(_ name: String, _ language: String) -> some View {
-        let active = model.phase != .choose && model.target == language
-        return Button { model.translate(to: language) } label: {
-            Text(name).font(.system(size: 9, weight: .medium)).padding(.horizontal, 7).padding(.vertical, 3)
-                .foregroundStyle(active ? MistCardPalette.accent : MistCardPalette.secondary)
-                .background(active ? MistCardPalette.selected : Color.clear).clipShape(RoundedRectangle(cornerRadius: 5))
-        }.buttonStyle(.plain).disabled(model.isReplacing).help(language == "en" ? "译成英文" : (language == "zh-Hans" ? "译成中文" : "查看原文"))
-    }
-
     private func tool(_ symbol: String, help: String, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 11, weight: .regular)).frame(width: 21, height: 21)
+            Image(systemName: symbol).font(.system(size: 11, weight: .regular)).frame(width: 22, height: 22)
                 .foregroundStyle(active ? MistCardPalette.accent : MistCardPalette.secondary)
-                .background(active ? MistCardPalette.selected : Color.clear).clipShape(RoundedRectangle(cornerRadius: 5))
+                .background(active ? MistCardPalette.selected : Color.clear).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
         }.buttonStyle(.plain).help(help).accessibilityLabel(help)
+    }
+}
+
+private struct CardButton: ButtonStyle {
+    var prominent = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.system(size: 10.5, weight: .medium))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .foregroundStyle(prominent ? Color.white : MistCardPalette.accent)
+            .background(prominent ? MistCardPalette.accent : MistCardPalette.selected)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .opacity(configuration.isPressed ? 0.75 : 1)
     }
 }

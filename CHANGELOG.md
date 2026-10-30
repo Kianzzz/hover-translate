@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+- Add native-language and target-language settings (both default to Simplified Chinese). Hover only shows the badge for text outside the native language.
+- Detect the source language automatically across 20 languages. CJK is decided by script; short Latin text defaults to English unless clearly another language. Text already in the target language falls back to the native language or English.
+- Selections in any language now show the badge first and open the card on hover; the shortcut and menu still open it directly.
+- Simplify the card to source + translation, removing the original / Chinese / English tabs.
+- Add per-language pack status and download in settings, a System Settings shortcut with real download progress, and refresh on returning to the app.
+- Only run OCR when Accessibility exposes no text, extend fast OCR to English, French, German, Spanish, Italian and Portuguese, and drop OCR results that fail a spelling check. This stops native text from being misread as random languages.
+- Keep the hover badge beside the pointer for multi-line blocks and padded controls (bounds taller than about two lines, or edges more than 24 points away).
+- Sign with a stable local identity when available so privacy grants survive rebuilds.
+- Redesign the main window, settings and translation card; settings use pull-down menus that open below the field.
+- 84 core checks.
+
 ## 0.3.2
 
 - Extract full sentences across soft line wraps while respecting paragraph boundaries and UTF16 positions.

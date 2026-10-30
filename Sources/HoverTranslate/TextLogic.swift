@@ -8,18 +8,99 @@ enum TextLogic {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func language(of text: String) -> String {
-        let recognizer = NLLanguageRecognizer()
-        recognizer.processString(text)
-        if recognizer.dominantLanguage == .simplifiedChinese || recognizer.dominantLanguage == .traditionalChinese { return "zh-Hans" }
-        if recognizer.dominantLanguage == .english { return "en" }
-        let chinese = text.unicodeScalars.filter { (0x3400...0x9FFF).contains($0.value) }.count
-        let latin = text.unicodeScalars.filter { (65...90).contains($0.value) || (97...122).contains($0.value) }.count
-        return chinese > latin / 2 ? "zh-Hans" : "en"
+    /// Languages offered in settings; identifiers match Apple Translation.
+    static let languages: [(id: String, name: String)] = [
+        ("zh-Hans", "简体中文"), ("zh-Hant", "繁體中文"), ("en", "English"), ("ja", "日本語"),
+        ("ko", "한국어"), ("fr", "Français"), ("de", "Deutsch"), ("es", "Español"),
+        ("it", "Italiano"), ("pt-BR", "Português"), ("ru", "Русский"), ("ar", "العربية"),
+        ("th", "ไทย"), ("vi", "Tiếng Việt"), ("id", "Bahasa Indonesia"), ("tr", "Türkçe"),
+        ("nl", "Nederlands"), ("pl", "Polski"), ("uk", "Українська"), ("hi", "हिन्दी")
+    ]
+
+    static func displayName(_ id: String) -> String {
+        let chinese = ["zh-Hans": "中文", "zh-Hant": "繁体中文", "en": "英语", "ja": "日语", "ko": "韩语",
+                       "fr": "法语", "de": "德语", "es": "西班牙语", "it": "意大利语", "pt-BR": "葡萄牙语",
+                       "ru": "俄语", "ar": "阿拉伯语", "th": "泰语", "vi": "越南语", "id": "印尼语",
+                       "tr": "土耳其语", "nl": "荷兰语", "pl": "波兰语", "uk": "乌克兰语", "hi": "印地语"]
+        return chinese[id] ?? Locale(identifier: "zh-Hans").localizedString(forIdentifier: id) ?? id
     }
 
-    static func hasEnglish(_ text: String) -> Bool {
-        text.range(of: "[A-Za-z]{2,}", options: .regularExpression) != nil && language(of: text) == "en"
+    /// Script decides CJK; the statistical recognizer only chooses among the
+    /// offered languages, and Latin text must be clearly non-English to switch.
+    static func language(of text: String) -> String {
+        func count(_ ranges: [ClosedRange<UInt32>]) -> Int {
+            text.unicodeScalars.filter { scalar in ranges.contains { $0.contains(scalar.value) } }.count
+        }
+        // Exclude ・ and ー: Chinese text uses them too.
+        let kana = count([0x3040...0x309F, 0x30A0...0x30FA, 0x30FD...0x30FF, 0x31F0...0x31FF, 0xFF66...0xFF9F])
+        let hangul = count([0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF])
+        let han = count([0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF])
+        let latin = count([0x41...0x5A, 0x61...0x7A, 0xC0...0x24F])
+        if kana > 0, kana + han >= latin { return "ja" }
+        if hangul > 0, hangul >= latin { return "ko" }
+        if han > 0, han * 2 > latin {
+            let recognizer = NLLanguageRecognizer()
+            recognizer.languageConstraints = [.simplifiedChinese, .traditionalChinese]
+            recognizer.processString(text)
+            return recognizer.dominantLanguage == .traditionalChinese ? "zh-Hant" : "zh-Hans"
+        }
+        let candidates: [NLLanguage: String] = [
+            .english: "en", .french: "fr", .german: "de", .spanish: "es", .italian: "it", .portuguese: "pt-BR",
+            .russian: "ru", .arabic: "ar", .thai: "th", .vietnamese: "vi", .indonesian: "id", .turkish: "tr",
+            .dutch: "nl", .polish: "pl", .ukrainian: "uk", .hindi: "hi"
+        ]
+        let recognizer = NLLanguageRecognizer()
+        recognizer.languageConstraints = Array(candidates.keys)
+        recognizer.processString(text)
+        guard let (top, confidence) = recognizer.languageHypotheses(withMaximum: 3).max(by: { $0.value < $1.value }),
+              let id = candidates[top] else { return "en" }
+        let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+        // Short UI labels and loanword-heavy phrases are mostly English in practice.
+        if latin * 2 >= letters, top != .english {
+            let words = text.split { !$0.isLetter && $0 != "'" && $0 != "-" }.count
+            return words >= 4 && confidence >= 0.8 ? id : "en"
+        }
+        return id
+    }
+
+    /// Latin-only OCR turns CJK glyphs into letter soup. Keep a result only when
+    /// most of its words are real words in the detected language's dictionary.
+    static func plausibleOCR(_ text: String) -> Bool {
+        let words = text.split { !$0.isLetter && $0 != "'" }.filter { $0.count >= 2 }.count
+        guard words > 0 else { return false }
+        let checker = NSSpellChecker.shared
+        let language = baseLanguage(language(of: text))
+        let nsText = text as NSString
+        var misspelled = 0, start = 0
+        while start < nsText.length {
+            let range = checker.checkSpelling(of: text, startingAt: start, language: language, wrap: false,
+                                              inSpellDocumentWithTag: 0, wordCount: nil)
+            guard range.location != NSNotFound, range.length > 0 else { break }
+            misspelled += 1
+            start = NSMaxRange(range)
+        }
+        return misspelled * 3 <= words
+    }
+
+    /// Chinese scripts count as one language when deciding what is "native".
+    static func baseLanguage(_ id: String) -> String {
+        String(id.split(separator: "-").first ?? Substring(id))
+    }
+
+    /// Short Chinese is often ambiguous between scripts, so scripts never count as a translation.
+    static func sameLanguage(_ left: String, _ right: String) -> Bool {
+        baseLanguage(left) == baseLanguage(right)
+    }
+
+    /// Hover only offers translation for real words outside the native language.
+    static func isForeign(_ text: String, native: String) -> Bool {
+        text.range(of: "\\p{L}{2,}", options: .regularExpression) != nil
+            && baseLanguage(language(of: text)) != baseLanguage(native)
+    }
+
+    /// Text already in the preferred language falls back to native, then English.
+    static func target(for source: String, preferred: String, native: String) -> String {
+        [preferred, native, "en", "zh-Hans"].first { !sameLanguage(source, $0) } ?? preferred
     }
 
     /// Keep UTF16 offsets stable while treating soft line wraps as spaces.
@@ -127,7 +208,9 @@ enum TextLogic {
         }
         // Use real text bounds when available. Prefer the closest edge, not the
         // end of a long sentence. Keep the badge fixed while the pointer travels.
-        if !source.isEmpty, !source.isInfinite, !source.isNull {
+        // Bounds taller than about two lines are usually a padded control or text
+        // block; their edges can be far from the pointer, so stay by the pointer.
+        if !source.isEmpty, !source.isInfinite, !source.isNull, source.height <= 40 {
             let options = [
                 clamped(pointer.x - size / 2, source.minY - gap - size),
                 clamped(pointer.x - size / 2, source.maxY + gap),
@@ -135,7 +218,7 @@ enum TextLogic {
                 clamped(source.minX - gap - size, pointer.y - size / 2)
             ].filter { !$0.intersects(source.insetBy(dx: -3, dy: -3)) }
             if let closest = options.min(by: { distance(pointer, to: $0) < distance(pointer, to: $1) }),
-               distance(pointer, to: closest) <= 64 { return closest }
+               distance(pointer, to: closest) <= 24 { return closest }
         }
         // Some apps expose the entire container instead of a text line. Do not
         // send the icon to that container's distant edge.
@@ -196,9 +279,21 @@ struct SelectionEdit: Sendable {
 enum CardLayout {
     static let minimumWidth: CGFloat = 240
     static let maximumWidth: CGFloat = 520
-    static let translationFontSize: CGFloat = 14
-    static let headerHeight: CGFloat = 30
+    static let translationFontSize: CGFloat = 15
+    static let headerHeight: CGFloat = 32
     static let maximumBodyHeight: CGFloat = 260
+    static let sourceFontSize: CGFloat = 12
+    static let sourceLineLimit = 3
+
+    /// The source stays readable but compact: at most three lines above the translation.
+    static func sourceHeight(source: String, width: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: sourceFontSize)
+        let line = ceil(font.ascender - font.descender + font.leading) + 2
+        let measured = ceil((source as NSString).boundingRect(with: CGSize(width: width - 32, height: 10000),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height)
+        let lines = max(1, min(CGFloat(sourceLineLimit), (measured / max(1, ceil(font.ascender - font.descender + font.leading))).rounded(.up)))
+        return lines * line
+    }
 
     static func width(source: String, result: String) -> CGFloat {
         func measured(_ text: String, size: CGFloat) -> CGFloat {
@@ -219,9 +314,9 @@ enum CardLayout {
         if loading || choosing { return 20 }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 3
-        let measured = ceil((result as NSString).boundingRect(with: CGSize(width: width - 24, height: 10000),
+        let measured = ceil((result as NSString).boundingRect(with: CGSize(width: width - 32, height: 10000),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: NSFont.systemFont(ofSize: translationFontSize), .paragraphStyle: paragraph]).height)
-        return failure ? min(88, max(42, measured + 24)) : min(maximumBodyHeight, max(20, measured + 2))
+        return failure ? min(96, max(50, measured + 32)) : min(maximumBodyHeight, max(20, measured + 2))
     }
 }
