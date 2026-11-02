@@ -35,11 +35,17 @@ final class HoverMonitor {
     private var revision = 0
     private var lastPermissionRefresh = Date.distantPast
     private var previousCaptureAccess = ""
+    private var lifecycle = CaptureLifecycle()
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var displayObserver: NSObjectProtocol?
+    var captureReady: Bool { lifecycle.isReady(at: ProcessInfo.processInfo.systemUptime) }
 
     init(model: AppModel) { self.model = model }
     var desktopTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 
     func start() {
+        guard timer == nil else { return }
+        observeWorkspace()
         let polling = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -49,7 +55,7 @@ final class HoverMonitor {
             Task { @MainActor in
                 guard let self else { return }
                 // The app's own normal paste emits key events in the destination.
-                if self.model.isReplacing { return }
+                if self.model.isReplacing || !self.captureReady { return }
                 if event.type == .keyDown {
                     if event.keyCode == 53 { self.selectionTask?.cancel(); self.model.dismiss(force: true) }
                     else if self.model.selectionVisible || self.hasSelectionBadge { self.model.dismiss() }
@@ -70,6 +76,62 @@ final class HoverMonitor {
                 self.model.dismiss()
             }
             return event
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        if let globalEvents { NSEvent.removeMonitor(globalEvents) }
+        if let localScrollEvents { NSEvent.removeMonitor(localScrollEvents) }
+        globalEvents = nil
+        localScrollEvents = nil
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        workspaceObservers.removeAll()
+        if let displayObserver { NotificationCenter.default.removeObserver(displayObserver) }
+        displayObserver = nil
+        selectionTask?.cancel()
+        resetMotion(at: NSEvent.mouseLocation)
+    }
+
+    private func observeWorkspace() {
+        let transitions: [(Notification.Name, CaptureLifecycle.Suspension, Bool)] = [
+            (NSWorkspace.willSleepNotification, .systemSleep, true),
+            (NSWorkspace.didWakeNotification, .systemSleep, false),
+            (NSWorkspace.screensDidSleepNotification, .displaySleep, true),
+            (NSWorkspace.screensDidWakeNotification, .displaySleep, false),
+            (NSWorkspace.sessionDidResignActiveNotification, .inactiveSession, true),
+            (NSWorkspace.sessionDidBecomeActiveNotification, .inactiveSession, false)
+        ]
+        // Avoid synchronous delivery through OperationQueue.main; enter the UI
+        // actor explicitly even when the workspace posts from a background thread.
+        for (name, reason, suspended) in transitions {
+            let observer = NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.timer != nil else { return }
+                    if suspended { self.lifecycle.suspend(reason) }
+                    else { self.lifecycle.resume(reason, at: ProcessInfo.processInfo.systemUptime) }
+                    self.resetAfterDisplayChange(refreshPermissions: !suspended)
+                }
+            }
+            workspaceObservers.append(observer)
+        }
+        displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.timer != nil else { return }
+                self.lifecycle.deferCapture(at: ProcessInfo.processInfo.systemUptime)
+                self.resetAfterDisplayChange(refreshPermissions: false)
+            }
+        }
+    }
+
+    private func resetAfterDisplayChange(refreshPermissions: Bool) {
+        selectionTask?.cancel()
+        resetMotion(at: NSEvent.mouseLocation)
+        model.dismiss(force: true)
+        if refreshPermissions {
+            model.refreshPermissions()
+            lastPermissionRefresh = Date()
         }
     }
 
@@ -154,6 +216,7 @@ final class HoverMonitor {
     }
 
     private func tick() {
+        guard captureReady else { return }
         // Refresh on return to the app, without repeatedly querying TCC while
         // the user is editing permissions in System Settings.
         if NSApp.isActive && Date().timeIntervalSince(lastPermissionRefresh) > 2 {
@@ -231,6 +294,7 @@ final class HoverMonitor {
     }
 
     func readSelection(automatic: Bool = false) {
+        guard captureReady else { return }
         guard !model.pinned, let front = NSWorkspace.shared.frontmostApplication,
               front.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         selectionTask?.cancel()

@@ -299,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func clipboard() { model.clipboard() }
     @objc func settings() { model.settings() }
     @objc func quit() { NSApp.terminate(nil) }
+    func applicationWillTerminate(_ notification: Notification) { monitor?.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationDidBecomeActive(_ notification: Notification) {
         model.continuePermissionSetup()
@@ -314,6 +315,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct Entry {
     @MainActor static func main() {
         let args = CommandLine.arguments
+        if args.contains("--check-capture-recovery") {
+            Task { @MainActor in
+                let model = AppModel(checkPermissions: false)
+                let monitor = HoverMonitor(model: model)
+                var hidden = 0
+                model.hideCard = { hidden += 1 }
+                monitor.start()
+                DiagnosticCheck.require(monitor.captureReady, "Monitor must start ready")
+                let center = NSWorkspace.shared.notificationCenter
+                func post(_ name: Notification.Name) async {
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        DispatchQueue.global().async {
+                            center.post(name: name, object: nil)
+                            continuation.resume()
+                        }
+                    }
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                }
+                model.present(CapturedText(text: "Sleep recovery", bounds: .zero, method: "test"), cocoaAnchor: .zero, selection: true)
+                model.pinned = true
+                await post(NSWorkspace.screensDidSleepNotification)
+                DiagnosticCheck.require(!monitor.captureReady && !model.pinned && !model.selectionVisible && hidden > 0,
+                                        "Screen sleep must suspend capture and discard stale pinned selections")
+                await post(NSWorkspace.willSleepNotification)
+                await post(NSWorkspace.sessionDidResignActiveNotification)
+                await post(NSWorkspace.didWakeNotification)
+                DiagnosticCheck.require(!monitor.captureReady, "System wake must not override other suspensions")
+                await post(NSWorkspace.screensDidWakeNotification)
+                await post(NSWorkspace.sessionDidBecomeActiveNotification)
+                DiagnosticCheck.require(!monitor.captureReady, "Wake must allow time for displays to recover")
+                try? await Task.sleep(nanoseconds: 2_100_000_000)
+                DiagnosticCheck.require(monitor.captureReady, "Hover capture must automatically resume")
+                NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                DiagnosticCheck.require(!monitor.captureReady, "Display changes must also reset capture")
+                monitor.stop()
+                let hiddenAtStop = hidden
+                await post(NSWorkspace.screensDidSleepNotification)
+                DiagnosticCheck.require(hidden == hiddenAtStop, "Stopping must remove workspace observers")
+                print("Capture recovery checks passed: workspace notifications, stale-card cleanup, overlapping suspensions, delayed resume, display changes and observer cleanup.")
+                exit(0)
+            }
+            dispatchMain()
+        }
         if args.contains("--check-hover-flow") {
             Task { @MainActor in
                 let model = AppModel(checkPermissions: false)
