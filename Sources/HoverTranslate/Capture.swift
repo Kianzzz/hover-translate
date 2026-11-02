@@ -184,16 +184,18 @@ enum TextCapture {
     }
 
     static func ocr(at point: CGPoint, word: Bool) async throws -> CapturedText? {
+        try Task.checkCancellation()
         guard CGPreflightScreenCaptureAccess() else { throw CaptureError.noScreenPermission }
         var displayID: CGDirectDisplayID = 0
         var count: UInt32 = 0
-        guard CGGetDisplaysWithPoint(point, 1, &displayID, &count) == .success, count > 0 else { return nil }
+        guard CGGetDisplaysWithPoint(point, 1, &displayID, &count) == .success, count > 0,
+              CGDisplayIsActive(displayID) != 0, CGDisplayIsAsleep(displayID) == 0 else { return nil }
         let display = CGDisplayBounds(displayID)
         let width = min(1400, display.width), height = min(720, display.height)
         let crop = CGRect(x: min(max(point.x - width / 2, display.minX), display.maxX - width),
                           y: min(max(point.y - height / 2, display.minY), display.maxY - height),
                           width: width, height: height)
-        let image = try await SCScreenshotManager.captureImage(in: crop)
+        let image = try await ScreenshotCapture.image(in: crop)
         return try await recognize(image: image, region: crop, at: point, word: word)
     }
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Handle ScreenCaptureKit callbacks that return neither an image nor an error without entering the generated async bridge that crashes on a missing image.
+- Pause hover and selection capture during system sleep, display sleep and inactive user sessions. Clear stale capture tasks and cards, refresh permissions on return, and wait two seconds for display recovery.
+- Reset capture after display reconfiguration and skip OCR on inactive or sleeping displays.
+- Add screenshot callback and cancellation checks, overlapping sleep/session state checks, and a workspace-notification recovery diagnostic.
+
 ## 0.4.0
 
 - Add native-language and target-language settings (both default to Simplified Chinese). Hover only shows the badge for text outside the native language.

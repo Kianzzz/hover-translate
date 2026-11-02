@@ -7,6 +7,9 @@ mkdir -p "$build_dir/checks"
 swiftc Sources/HoverTranslate/TextLogic.swift Sources/HoverTranslate/DiagnosticCheck.swift Tests/HoverTranslateTests/TextLogicTests.swift -o "$build_dir/checks/CoreChecks"
 "$build_dir/checks/CoreChecks"
 
+swiftc Sources/HoverTranslate/CaptureSafety.swift Sources/HoverTranslate/DiagnosticCheck.swift Tests/HoverTranslateTests/CaptureSafetyTests.swift -o "$build_dir/checks/CaptureSafetyChecks"
+"$build_dir/checks/CaptureSafetyChecks"
+
 # A failed diagnostic must exit 1 (not SIGTRAP/SIGABRT) and explain the failure.
 swiftc Sources/HoverTranslate/DiagnosticCheck.swift Tests/HoverTranslateTests/DiagnosticExitTests.swift -o "$build_dir/checks/DiagnosticExitChecks"
 "$build_dir/checks/DiagnosticExitChecks"

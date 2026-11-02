@@ -18,6 +18,7 @@ Native macOS hover and selection translator built with SwiftUI, AppKit, Vision, 
 - **完整语境**：优先提取鼠标所在句子；软换行会合并，无法定位字符的独立文字块保留完整内容。OCR 按行距与左对齐合并同段文字，再提取所在句子。
 - **长译文**：正文按内容增高，最高 260 点；更长内容在浮窗内滚动阅读。
 - **外观**：原文 + 译文两段式磨砂浮窗；绿色悬停图标随系统深浅外观自动调整明暗。
+- **休眠恢复**：电脑或屏幕休眠、用户会话切换时暂停取词，恢复后等待 2 秒再继续；显示器变化会清理旧取词和浮窗。截图偶发返回空图片时安全跳过，不再导致应用退出。
 
 ![可编辑选区浮窗样式](docs/images/selection-translation.png)
 
@@ -95,8 +96,9 @@ zsh scripts/test.sh
 "$HOME/Applications/浮译.app/Contents/MacOS/HoverTranslate" --check-engine
 ```
 
-- `test.sh`：直接编译执行 84 项文本、语种识别、坐标、图标位置、浮窗尺寸与选区替换边界检查。
+- `test.sh`：直接编译执行 84 项文本、语种识别、坐标、图标位置、浮窗尺寸与选区替换边界检查，另检查截图空返回、截图错误、取消任务和休眠恢复状态。
 - `--check-hover-flow`：验证取词安全、悬停生命周期、选区浮窗保留、替换按钮状态和无效目标的剪贴板安全；不执行对真实输入框的替换。
+- `--check-capture-recovery`：模拟电脑休眠、屏幕休眠、用户会话与显示器变更通知，验证旧浮窗清理、暂停和自动恢复；不改变电脑实际的休眠设置。
 - `python3 scripts/check-ocr-context.py <HoverTranslate可执行文件路径>`：使用仓库内合成文字图片验证真实 Vision 跨行 OCR、旁栏隔离、段落间隔、菜单与空白命中；需要 Python 3，不读取屏幕。
 - `--check-engine`：检查已安装的语言包，并在可用时执行真实中英双向翻译。
 - `--check-packs`：输出常用语种译成简体中文的语言包状态。
