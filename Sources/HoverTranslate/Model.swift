@@ -68,19 +68,19 @@ enum CardPhase { case idle, loading, result, failure }
 final class AppModel: ObservableObject {
     @Published var page = "home"
     @Published var enabled = false
-    @Published var hoverEnabled = true { didSet { UserDefaults.standard.set(hoverEnabled, forKey: "hoverEnabled") } }
-    @Published var selectionEnabled = true { didSet { UserDefaults.standard.set(selectionEnabled, forKey: "selectionEnabled") } }
-    @Published var ocrEnabled = true { didSet { UserDefaults.standard.set(ocrEnabled, forKey: "ocrEnabled") } }
-    @Published var delay = 0.6 { didSet { UserDefaults.standard.set(delay, forKey: "hoverDelay") } }
-    @Published var closeDelay = 0.0 { didSet { if persistSettings { UserDefaults.standard.set(closeDelay, forKey: "closeDelay") } } }
-    @Published var wordMode = false { didSet { UserDefaults.standard.set(wordMode, forKey: "wordMode") } }
+    @Published var hoverEnabled = true { didSet { defaults?.set(hoverEnabled, forKey: "hoverEnabled") } }
+    @Published var selectionEnabled = true { didSet { defaults?.set(selectionEnabled, forKey: "selectionEnabled") } }
+    @Published var ocrEnabled = true { didSet { defaults?.set(ocrEnabled, forKey: "ocrEnabled") } }
+    @Published var delay = 0.6 { didSet { defaults?.set(delay, forKey: "hoverDelay") } }
+    @Published var closeDelay = 0.0 { didSet { defaults?.set(closeDelay, forKey: "closeDelay") } }
+    @Published var wordMode = false { didSet { defaults?.set(wordMode, forKey: "wordMode") } }
     /// Hover ignores text in this language; selection still offers translation.
     @Published var nativeLanguage = "zh-Hans" {
-        didSet { if persistSettings { UserDefaults.standard.set(nativeLanguage, forKey: "nativeLanguage") } }
+        didSet { defaults?.set(nativeLanguage, forKey: "nativeLanguage") }
     }
     @Published var targetLanguage = "zh-Hans" {
         didSet {
-            if persistSettings { UserDefaults.standard.set(targetLanguage, forKey: "targetLanguage") }
+            defaults?.set(targetLanguage, forKey: "targetLanguage")
             Task { await refreshLanguage() }
         }
     }
@@ -116,7 +116,8 @@ final class AppModel: ObservableObject {
     private var translationTask: Task<Void, Never>?
     private var requestID = UUID()
     private var screenGuidancePending = false
-    private var persistSettings = true
+    /// nil in diagnostics: checks neither read nor overwrite the user's settings.
+    private let defaults: UserDefaults?
     var showCard: ((CGRect) -> Void)?
     var hideCard: (() -> Void)?
     var showWindow: (() -> Void)?
@@ -132,12 +133,12 @@ final class AppModel: ObservableObject {
     var canReplaceSelection: Bool {
         guard hasReplacementTarget, !isReplacing, phase == .result,
               let replacementTarget, !result.isEmpty else { return false }
-        return result != replacementTarget.edit.selected
+        return result != TextLogic.clean(replacementTarget.edit.selected)
     }
 
     func replaceSelection() {
         guard canReplaceSelection, let destination = replacementTarget else { return }
-        let output = result
+        let output = TextLogic.preservingEdgeWhitespace(of: destination.edit.selected, around: result)
         let id = UUID()
         replacementID = id
         isReplacing = true
@@ -179,17 +180,16 @@ final class AppModel: ObservableObject {
     }
 
     init(checkPermissions: Bool = true) {
-        persistSettings = checkPermissions
-        let d = UserDefaults.standard
-        if d.object(forKey: "hoverDelay") != nil { delay = min(1.5, max(0.3, d.double(forKey: "hoverDelay"))) }
-        if d.object(forKey: "closeDelay") != nil { closeDelay = min(1, max(0, d.double(forKey: "closeDelay"))) }
-        if d.object(forKey: "hoverEnabled") != nil { hoverEnabled = d.bool(forKey: "hoverEnabled") }
-        if d.object(forKey: "selectionEnabled") != nil { selectionEnabled = d.bool(forKey: "selectionEnabled") }
-        if d.object(forKey: "ocrEnabled") != nil { ocrEnabled = d.bool(forKey: "ocrEnabled") }
-        wordMode = d.bool(forKey: "wordMode")
-        if let native = d.string(forKey: "nativeLanguage") { nativeLanguage = native }
-        if let preferred = d.string(forKey: "targetLanguage") { targetLanguage = preferred }
-        if checkPermissions {
+        defaults = checkPermissions ? .standard : nil
+        if let d = defaults {
+            if d.object(forKey: "hoverDelay") != nil { delay = min(1.5, max(0.3, d.double(forKey: "hoverDelay"))) }
+            if d.object(forKey: "closeDelay") != nil { closeDelay = min(1, max(0, d.double(forKey: "closeDelay"))) }
+            if d.object(forKey: "hoverEnabled") != nil { hoverEnabled = d.bool(forKey: "hoverEnabled") }
+            if d.object(forKey: "selectionEnabled") != nil { selectionEnabled = d.bool(forKey: "selectionEnabled") }
+            if d.object(forKey: "ocrEnabled") != nil { ocrEnabled = d.bool(forKey: "ocrEnabled") }
+            wordMode = d.bool(forKey: "wordMode")
+            if let native = d.string(forKey: "nativeLanguage") { nativeLanguage = native }
+            if let preferred = d.string(forKey: "targetLanguage") { targetLanguage = preferred }
             enabled = d.bool(forKey: "globalEnabled")
             refreshPermissions()
             if enabled { updatePermissionStatus() }
@@ -290,7 +290,7 @@ final class AppModel: ObservableObject {
 
     func toggleEnabled() {
         enabled.toggle()
-        if persistSettings { UserDefaults.standard.set(enabled, forKey: "globalEnabled") }
+        defaults?.set(enabled, forKey: "globalEnabled")
         if !enabled { screenGuidancePending = false; dismiss(force: true) }
         refreshPermissions()
         updatePermissionStatus()

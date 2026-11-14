@@ -103,6 +103,26 @@ enum TextLogic {
         [preferred, native, "en", "zh-Hans"].first { !sameLanguage(source, $0) } ?? preferred
     }
 
+    /// The card translates trimmed text, but the editor selection may carry
+    /// surrounding spaces or line breaks (e.g. a double-clicked word with its
+    /// trailing space). Keep them so neighbouring text does not run together.
+    static func preservingEdgeWhitespace(of original: String, around translation: String) -> String {
+        let blank = CharacterSet.whitespacesAndNewlines
+        let scalars = original.unicodeScalars
+        let leading = scalars.prefix { blank.contains($0) }
+        guard leading.count < scalars.count else { return translation }
+        let trailing = scalars.reversed().prefix { blank.contains($0) }.reversed()
+        return String(String.UnicodeScalarView(leading)) + clean(translation) + String(String.UnicodeScalarView(trailing))
+    }
+
+    /// A plain click must not reopen an old selection; only a drag, a
+    /// double/triple click or a shift-extended click is a selection gesture.
+    static func isSelectionGesture(from down: CGPoint?, to up: CGPoint, clickCount: Int, extending: Bool) -> Bool {
+        if clickCount >= 2 || extending { return true }
+        guard let down else { return false }
+        return hypot(up.x - down.x, up.y - down.y) >= 4
+    }
+
     /// Keep UTF16 offsets stable while treating soft line wraps as spaces.
     /// Blank lines remain paragraph boundaries; never truncate a sentence mid-way.
     static func segmentRange(_ text: String, utf16Offset: Int, word: Bool) -> NSRange? {

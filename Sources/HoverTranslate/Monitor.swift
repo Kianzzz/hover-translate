@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 @MainActor
 final class HoverMonitor {
@@ -35,17 +36,24 @@ final class HoverMonitor {
     private var revision = 0
     private var lastPermissionRefresh = Date.distantPast
     private var previousCaptureAccess = ""
+    private var mouseDownPoint: CGPoint?
+    private var enabledSubscription: AnyCancellable?
 
     init(model: AppModel) { self.model = model }
     var desktopTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 
     func start() {
-        let polling = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+        // Polling only runs while something needs it; see updatePolling().
+        enabledSubscription = model.$enabled.dropFirst().sink { [weak self] enabled in
+            guard enabled else { return }
+            MainActor.assumeIsolated { self?.startPolling() }
         }
-        timer = polling
-        RunLoop.main.add(polling, forMode: .common)
+        updatePolling()
         globalEvents = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .leftMouseDown, .rightMouseDown, .scrollWheel, .keyDown]) { [weak self] event in
+            // Read pointer and click details now; the hop below runs later.
+            let location = NSEvent.mouseLocation
+            let clickCount = event.type == .leftMouseUp ? event.clickCount : 0
+            let extending = event.modifierFlags.contains(.shift)
             Task { @MainActor in
                 guard let self else { return }
                 // The app's own normal paste emits key events in the destination.
@@ -55,7 +63,11 @@ final class HoverMonitor {
                     else if self.model.selectionVisible || self.hasSelectionBadge { self.model.dismiss() }
                     return
                 }
-                if event.type == .leftMouseUp, self.model.enabled, self.model.selectionEnabled {
+                if event.type == .leftMouseDown { self.mouseDownPoint = location }
+                if event.type == .leftMouseUp, self.model.enabled, self.model.selectionEnabled,
+                   TextLogic.isSelectionGesture(from: self.mouseDownPoint, to: location,
+                                                clickCount: clickCount, extending: extending) {
+                    self.mouseDownPoint = nil
                     self.readSelection(automatic: true)
                 } else {
                     self.selectionTask?.cancel()
@@ -73,6 +85,26 @@ final class HoverMonitor {
         }
     }
 
+    /// The 25 Hz pointer poll is needed only while translation is on or a
+    /// badge/card is on screen; a paused app must not keep waking the CPU.
+    var pollingNeeded: Bool { model.enabled || candidate != nil || visibleCardFrame?() != nil }
+    var isPolling: Bool { timer != nil }
+
+    func startPolling() {
+        guard timer == nil else { return }
+        resetMotion(at: NSEvent.mouseLocation)
+        let polling = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+        timer = polling
+        RunLoop.main.add(polling, forMode: .common)
+    }
+
+    func updatePolling() {
+        if pollingNeeded { startPolling() }
+        else { timer?.invalidate(); timer = nil }
+    }
+
     var hasSelectionBadge: Bool { candidate?.selection == true && candidate?.opened == false }
 
     func clearCandidate() {
@@ -87,6 +119,7 @@ final class HoverMonitor {
         candidate = Candidate(capture: capture, sourceRect: sourceRect, badgeRect: badgeRect, origin: pointer, previousPoint: pointer,
                               demo: demo, selection: selection, replacement: replacement)
         outsideSince = nil
+        startPolling()
         model.status = selection ? "已选中文字 · 将鼠标移到“译”图标查看译文" : "已发现外语 · 将鼠标移到“译”图标查看译文"
     }
 
@@ -164,6 +197,7 @@ final class HoverMonitor {
             resetMotion(at: NSEvent.mouseLocation)
             previousEnabled = model.enabled
         }
+        guard pollingNeeded else { updatePolling(); return }
         let access = "\(model.accessibility):\(model.screenPermission):\(model.ocrEnabled):\(model.hoverEnabled)"
         if access != previousCaptureAccess {
             previousCaptureAccess = access

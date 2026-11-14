@@ -436,6 +436,48 @@ struct Entry {
                              "Read-only selections never expose replacement or stale errors")
                 DiagnosticCheck.require(monitor.retainSelection(), "Read-only and editable selections share the persistent card")
                 model.dismiss(force: true)
+                let spaced = ReplacementTarget(element: AXUIElementCreateApplication(1), pid: 1,
+                    edit: SelectionEdit(value: "Say Hello now", selected: "Hello ", range: NSRange(location: 4, length: 6)))
+                model.present(CapturedText(text: "Hello", bounds: .zero, method: "test"), cocoaAnchor: source, selection: true, replacement: spaced)
+                model.result = "Hello"; model.phase = .result
+                DiagnosticCheck.require(!model.canReplaceSelection, "Whitespace-only differences do not count as a translation")
+                model.result = "你好"
+                DiagnosticCheck.require(model.canReplaceSelection, "A selection with a trailing space can still be replaced")
+                model.dismiss(force: true)
+                // Polling runs only while it is needed.
+                let idle = HoverMonitor(model: model)
+                idle.showBadge = { _, _ in badge }
+                model.enabled = false
+                idle.updatePolling()
+                DiagnosticCheck.require(!idle.isPolling, "A paused app with nothing on screen does not poll")
+                idle.stage(CapturedText(text: "Keep in Dock", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
+                DiagnosticCheck.require(idle.isPolling, "A staged badge starts polling, even while paused")
+                idle.clearCandidate(); idle.updatePolling()
+                DiagnosticCheck.require(!idle.isPolling, "Polling stops once the badge is gone")
+                model.enabled = true; idle.updatePolling()
+                DiagnosticCheck.require(idle.isPolling, "Enabled translation polls the pointer")
+                model.enabled = false; idle.updatePolling()
+                DiagnosticCheck.require(!idle.isPolling, "Pausing stops polling")
+                // Clipboard lease on a private pasteboard: never touch the user's clipboard.
+                let board = NSPasteboard(name: NSPasteboard.Name("io.github.kianzzz.hovertranslate.check.\(UUID().uuidString)"))
+                board.clearContents(); board.setString("user clipboard", forType: .string)
+                let lease = try! PasteboardLease(text: "译文", board: board)
+                DiagnosticCheck.require(board.string(forType: .string) == "译文", "The lease offers the translation for pasting")
+                DiagnosticCheck.require(PasteboardLease.markerTypes.allSatisfy { board.types?.contains($0) == true },
+                                        "The lease is marked transient so clipboard managers skip it")
+                lease.restore()
+                DiagnosticCheck.require(board.string(forType: .string) == "user clipboard"
+                                        && !PasteboardLease.markerTypes.contains { board.types?.contains($0) == true },
+                                        "Restoring brings back the user's clipboard without markers")
+                let second = try! PasteboardLease(text: "译文", board: board)
+                board.clearContents(); board.setString("copied meanwhile", forType: .string)
+                second.restore()
+                DiagnosticCheck.require(board.string(forType: .string) == "copied meanwhile", "A copy made meanwhile is never overwritten")
+                board.releaseGlobally()
+                let pasteKey = KeyboardLayout.keyCode(for: "v")
+                DiagnosticCheck.require(pasteKey != nil, "The current keyboard layout resolves the ⌘V key")
+                print("Replacement checks passed: edge whitespace, transient clipboard lease, restore safety, paste key \(pasteKey!) for the current layout.")
+                print("Polling checks passed: idle when paused, active for badges and enabled translation.")
                 print("Selection-card checks passed: preview gating, selection badge, native fallback, read-only mode, busy state, invalid target and clipboard safety.")
                 print("Capture safety and hover-flow checks passed: own-element and own-selection rejection, remote element acceptance, permission publication, badge opening, close delay, bridge, reentry and pinned cards.")
                 exit(0)

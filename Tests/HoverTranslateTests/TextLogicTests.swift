@@ -2,6 +2,7 @@ import Foundation
 
 @main
 struct CoreChecks {
+    nonisolated(unsafe) static var passed = 0
     static func main() {
         let text = "First sentence. Second sentence. Third sentence."
         expect(TextLogic.segment(text, utf16Offset: 20, word: false) == "Second sentence.", "只提取鼠标所在句子")
@@ -123,10 +124,24 @@ struct CoreChecks {
         expect(TextLogic.ocrSentence(lines: menu, hit: 0, offset: 3) == "Keep in Dock", "短菜单项不能拼成段落")
         let missing = [ocrLine("Text on the first line of a longer paragraph", 100, 100), ocrLine("Text in a distant paragraph should not join.", 100, 260)]
         expect(TextLogic.ocrSentence(lines: missing, hit: 0, offset: 10) == missing[0].text, "较大空隙不能跨越")
-        print("84 core checks passed.")
+        // Replacement keeps the selection's own surrounding whitespace.
+        expect(TextLogic.preservingEdgeWhitespace(of: "hello ", around: "你好") == "你好 ", "替换保留选区尾随空格")
+        expect(TextLogic.preservingEdgeWhitespace(of: "\n  Good design.\t", around: "好的设计。") == "\n  好的设计。\t", "替换保留选区首尾换行与缩进")
+        expect(TextLogic.preservingEdgeWhitespace(of: "hello", around: " 你好 ") == "你好", "无空白选区不额外添加空格")
+        expect(TextLogic.preservingEdgeWhitespace(of: "\u{00a0}word\u{00a0}", around: "词") == "\u{00a0}词\u{00a0}", "不换行空格原样保留")
+        // Only real selection gestures read the selection on mouse-up.
+        let down = CGPoint(x: 100, y: 100)
+        expect(!TextLogic.isSelectionGesture(from: down, to: CGPoint(x: 101, y: 101), clickCount: 1, extending: false), "普通单击不重新读取旧选区")
+        expect(TextLogic.isSelectionGesture(from: down, to: CGPoint(x: 160, y: 100), clickCount: 1, extending: false), "拖选触发选区读取")
+        expect(TextLogic.isSelectionGesture(from: down, to: down, clickCount: 2, extending: false), "双击选词触发选区读取")
+        expect(TextLogic.isSelectionGesture(from: down, to: down, clickCount: 3, extending: false), "三击选段触发选区读取")
+        expect(TextLogic.isSelectionGesture(from: down, to: down, clickCount: 1, extending: true), "Shift 单击扩展选区触发读取")
+        expect(!TextLogic.isSelectionGesture(from: nil, to: down, clickCount: 1, extending: false), "缺少按下位置时不当作拖选")
+        print("\(passed) core checks passed.")
     }
     static func expect(_ condition: @autoclosure () -> Bool, _ name: String) {
         DiagnosticCheck.require(condition(), name)
+        passed += 1
         print("PASS: \(name)")
     }
 }

@@ -83,7 +83,7 @@ HOVER_TRANSLATE_BUILD_DIR="$HOME/Library/Caches/HoverTranslate/public-build" HOV
 - 应用自身不向第三方翻译服务上传文字或截图，不接入分析统计。
 - 识别使用 Accessibility / Vision，翻译使用 Apple Translation；语言包准备可能需要联网下载。
 - 不自动监视剪贴板。手动翻译剪贴板与复制译文均由用户触发。
-- 点击替换时临时借用剪贴板，在目标应用消费粘贴后恢复；期间用户主动复制的新内容不会被覆盖。
+- 点击替换时临时借用剪贴板，并标记为临时内容，剪贴板管理工具不会记录；确认目标应用已读取粘贴后恢复（最多等待 3 秒），期间用户主动复制的新内容不会被覆盖。
 - 翻译缓存与当前选区只留在进程内存，不记录翻译历史或持久化截图。设置通过 UserDefaults 保存。
 - 受保护或密码输入框不会参与替换。
 
@@ -95,8 +95,8 @@ zsh scripts/test.sh
 "$HOME/Applications/浮译.app/Contents/MacOS/HoverTranslate" --check-engine
 ```
 
-- `test.sh`：直接编译执行 84 项文本、语种识别、坐标、图标位置、浮窗尺寸与选区替换边界检查。
-- `--check-hover-flow`：验证取词安全、悬停生命周期、选区浮窗保留、替换按钮状态和无效目标的剪贴板安全；不执行对真实输入框的替换。
+- `test.sh`：直接编译执行 94 项文本、语种识别、坐标、图标位置、浮窗尺寸、选区手势与选区替换边界检查。
+- `--check-hover-flow`：验证取词安全、悬停生命周期、选区浮窗保留、替换按钮状态、按需轮询、临时剪贴板标记与恢复（使用独立临时剪贴板）和无效目标的剪贴板安全；不读取或改写用户设置，不执行对真实输入框的替换。
 - `python3 scripts/check-ocr-context.py <HoverTranslate可执行文件路径>`：使用仓库内合成文字图片验证真实 Vision 跨行 OCR、旁栏隔离、段落间隔、菜单与空白命中；需要 Python 3，不读取屏幕。
 - `--check-engine`：检查已安装的语言包，并在可用时执行真实中英双向翻译。
 - `--check-packs`：输出常用语种译成简体中文的语言包状态。

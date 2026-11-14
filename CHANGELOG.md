@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Keep leading and trailing whitespace of the selection when replacing it, so a double-clicked word with its trailing space no longer runs into the next word.
+- Restore the clipboard only after the target editor has consumed the paste (up to 3 seconds) instead of after a fixed 800 ms, so slow editors can no longer paste the previous clipboard.
+- Mark the temporary replacement clipboard as transient and auto-generated so clipboard managers skip it.
+- Resolve the ⌘V key from the current keyboard layout (Dvorak, AZERTY and others) instead of assuming QWERTY.
+- Read the selection only after a drag, double/triple click or shift-click; a plain click no longer reopens an old selection.
+- Stop the 25 Hz pointer poll while translation is paused and nothing is on screen.
+- Diagnostics no longer read or overwrite the user's settings.
+- 94 core checks; hover-flow adds polling, clipboard lease and paste-key checks.
+
 ## 0.4.0
 
 - Add native-language and target-language settings (both default to Simplified Chinese). Hover only shows the badge for text outside the native language.
