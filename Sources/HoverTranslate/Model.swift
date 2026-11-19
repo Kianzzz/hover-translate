@@ -66,10 +66,21 @@ final class LocalTranslator {
 enum CardPhase { case idle, loading, result, failure }
 @MainActor
 final class AppModel: ObservableObject {
+    @Published var provider = AIProvider.apple {
+        didSet { defaults?.set(provider.rawValue, forKey: "translationProvider") }
+    }
+    @Published var availableProviders: [AIProvider] = [.apple]
+    var capturingRegion = false
+    func refreshProviders() async {
+        var providers = [AIProvider.apple]
+        for p in [AIProvider.codex, .claude] {
+            if await p.authenticated() { providers.append(p) }
+        }
+        availableProviders = providers
+    }
     @Published var page = "home"
     @Published var enabled = false
     @Published var hoverEnabled = true { didSet { defaults?.set(hoverEnabled, forKey: "hoverEnabled") } }
-    @Published var selectionEnabled = true { didSet { defaults?.set(selectionEnabled, forKey: "selectionEnabled") } }
     @Published var ocrEnabled = true { didSet { defaults?.set(ocrEnabled, forKey: "ocrEnabled") } }
     @Published var delay = 0.6 { didSet { defaults?.set(delay, forKey: "hoverDelay") } }
     @Published var closeDelay = 0.0 { didSet { defaults?.set(closeDelay, forKey: "closeDelay") } }
@@ -84,11 +95,11 @@ final class AppModel: ObservableObject {
             Task { await refreshLanguage() }
         }
     }
+    @Published var japaneseKanji = false { didSet { defaults?.set(japaneseKanji, forKey: "japaneseKanji") } }
     @Published var sourceLanguage = "en"
     @Published private(set) var missingPack: (source: String, target: String)?
     @Published var accessibility = false
     @Published var screenPermission = false
-    @Published var languageStatus = "检查中"
     @Published var languageReady = false
     @Published var preparationConfig: TranslationSession.Configuration?
     @Published var preparationMessage = ""
@@ -120,6 +131,7 @@ final class AppModel: ObservableObject {
     private let defaults: UserDefaults?
     var showCard: ((CGRect) -> Void)?
     var hideCard: (() -> Void)?
+    var startScreenshot: (() -> Void)?
     var showWindow: (() -> Void)?
     var pointerInCard: (() -> Bool)?
     var stageHover: ((CapturedText, CGRect, CGPoint, Bool) -> Void)?
@@ -185,8 +197,10 @@ final class AppModel: ObservableObject {
             if d.object(forKey: "hoverDelay") != nil { delay = min(1.5, max(0.3, d.double(forKey: "hoverDelay"))) }
             if d.object(forKey: "closeDelay") != nil { closeDelay = min(1, max(0, d.double(forKey: "closeDelay"))) }
             if d.object(forKey: "hoverEnabled") != nil { hoverEnabled = d.bool(forKey: "hoverEnabled") }
-            if d.object(forKey: "selectionEnabled") != nil { selectionEnabled = d.bool(forKey: "selectionEnabled") }
             if d.object(forKey: "ocrEnabled") != nil { ocrEnabled = d.bool(forKey: "ocrEnabled") }
+            provider = AIProvider(rawValue: d.string(forKey: "translationProvider") ?? "") ?? .apple
+            Task { await refreshProviders() }
+            japaneseKanji = d.bool(forKey: "japaneseKanji")
             wordMode = d.bool(forKey: "wordMode")
             if let native = d.string(forKey: "nativeLanguage") { nativeLanguage = native }
             if let preferred = d.string(forKey: "targetLanguage") { targetLanguage = preferred }
@@ -206,6 +220,7 @@ final class AppModel: ObservableObject {
         status = accessibility ? "系统取词权限已生效" : "当前版本的取词权限尚未生效 · 请确认添加的是当前浮译应用"
     }
 
+    var subtitleText: String { phase == .loading ? "正在翻译…" : result.components(separatedBy: .newlines).joined(separator: " ") }
     var cardWidth: CGFloat { CardLayout.width(source: source, result: phase == .result ? result : "") }
     var cardSourceHeight: CGFloat { CardLayout.sourceHeight(source: source, width: cardWidth) }
     var cardBodyHeight: CGFloat {
@@ -226,22 +241,17 @@ final class AppModel: ObservableObject {
         if enabled, changed { updatePermissionStatus() }
     }
 
-    /// English is the most common source, so its pack decides the ready badge.
     var preparationSource: String { TextLogic.sameLanguage(targetLanguage, "en") ? "zh-Hans" : "en" }
 
     func refreshLanguage() async {
         let availability = TranslationRuntime.availability()
-        let target = targetLanguage, source = preparationSource
-        let status = await availability.status(from: Locale.Language(identifier: source), to: Locale.Language(identifier: target))
-        guard target == targetLanguage else { return }
-        languageReady = status == .installed
-        let pair = "\(TextLogic.displayName(source)) → \(TextLogic.displayName(target))"
-        languageStatus = languageReady ? pair + " · 已就绪，离线可用" : (status == .unsupported ? pair + " · 当前系统不支持" : pair + " · 需要下载语言包")
+        let target = targetLanguage
         var packs: [String: LanguageAvailability.Status] = [:]
         for language in TextLogic.languages where !TextLogic.sameLanguage(language.id, target) {
             packs[language.id] = await availability.status(from: Locale.Language(identifier: language.id), to: Locale.Language(identifier: target))
         }
         guard target == targetLanguage else { return }
+        languageReady = ["ja", "ko", "en"].filter { !TextLogic.sameLanguage($0, target) }.allSatisfy { packs[$0] == .installed }
         packStatus = packs
     }
 
@@ -317,7 +327,7 @@ final class AppModel: ObservableObject {
         if !enabled { status = "全局翻译已暂停" }
         else if !accessibility { status = "请在隐私权限页开启“浮译”（设备控制与数据访问 / 辅助功能）" }
         else if ocrEnabled && !screenPermission { status = "覆盖范围受限 · 系统选项和图片需要识图授权，请打开偏好设置" }
-        else { status = "等待外语悬停 · 移到“译”图标查看译文" }
+        else { status = "等待悬停外语" }
     }
 
     func present(_ capture: CapturedText, cocoaAnchor: CGRect, selection: Bool, replacement: ReplacementTarget? = nil) {
@@ -334,7 +344,7 @@ final class AppModel: ObservableObject {
         result = ""
         copied = false
         pinned = false
-        sourceLanguage = TextLogic.language(of: capture.text)
+        sourceLanguage = TextLogic.language(of: capture.text, japaneseKanji: japaneseKanji)
         target = TextLogic.target(for: sourceLanguage, preferred: targetLanguage, native: nativeLanguage)
         phase = .loading
         showCard?(anchor)
@@ -355,7 +365,7 @@ final class AppModel: ObservableObject {
         translationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let output = try await translator.translate(input, from: from, to: language)
+                let output = try await provider == .apple ? translator.translate(input, from: from, to: language) : provider.translate(input, from: from, to: language)
                 guard !Task.isCancelled, requestID == id else { return }
                 result = output; phase = .result; status = "翻译完成"
             } catch is CancellationError {
@@ -395,13 +405,19 @@ final class AppModel: ObservableObject {
                 cocoaAnchor: CGRect(origin: mouse, size: CGSize(width: 8, height: 18)), selection: true)
     }
 
+    func presentSelection(_ text: String) {
+        dismiss(force: true)
+        present(CapturedText(text: text, bounds: .zero, method: "右键选区"),
+                cocoaAnchor: CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 1, height: 1)), selection: true)
+    }
+
     func manualTranslate() {
         let text = TextLogic.clean(manualText)
         guard !text.isEmpty else { return }
         let rect = NSApp.keyWindow.map { CGRect(x: $0.frame.midX - 200, y: $0.frame.midY + 80, width: 400, height: 30) }
             ?? CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 20, height: 20))
         dismiss(force: true)
-        present(CapturedText(text: text, bounds: .zero, method: "文字试用 · 本机翻译"), cocoaAnchor: rect, selection: true)
+        present(CapturedText(text: text, bounds: .zero, method: "文字试用"), cocoaAnchor: rect, selection: true)
     }
 
     func settings() { page = "settings"; showWindow?() }

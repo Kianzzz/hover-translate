@@ -20,6 +20,12 @@ struct CoreChecks {
         expect(!TextLogic.isForeign("Changes take effect after restart.", native: "en"), "母语为英文时悬停跳过英文")
         expect(TextLogic.isForeign("你好，世界。今天天气很好。", native: "en"), "母语为英文时中文是外语")
         expect(TextLogic.language(of: "Good design makes complex things feel simple.") == "en", "英文来源检测")
+        expect(TextLogic.isForeign("끝", native: "zh-Hans"), "单字韩语按钮")
+        expect(TextLogic.isForeign("次", native: "zh-Hans", japaneseKanji: true), "日语阅读时识别单汉字")
+        expect(!TextLogic.isForeign("次", native: "zh-Hans"), "默认保留中文母语过滤")
+        expect(TextLogic.isForeign("へ", native: "zh-Hans"), "单个假名")
+        expect(TextLogic.language(of: "Bluetooth 설정") == "ko", "韩语按钮含英文产品名")
+        expect(TextLogic.language(of: "Bluetooth を開く") == "ja", "日语按钮含英文产品名")
         for phrase in ["Keep in Dock", "Sign in", "Show all", "Learn more", "Open file", "Do not disturb", "Download complete",
                        "Settings saved", "Hover text here", "Read more", "Get started", "Release notes", "Dark mode", "Open in new tab"] {
             expect(TextLogic.language(of: phrase) == "en", "短英文不误判为其他语言：" + phrase)

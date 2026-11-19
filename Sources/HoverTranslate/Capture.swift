@@ -42,6 +42,7 @@ enum TextCapture {
     /// The fast recognizer covers these Latin-script languages; English keeps priority.
     static let ocrLanguages = ["en-US", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-BR"]
     static let queue = DispatchQueue(label: "io.github.kianzzz.hovertranslate.capture", qos: .userInitiated)
+    static let accurateQueue = DispatchQueue(label: "io.github.kianzzz.hovertranslate.multilingual-ocr", qos: .userInitiated)
     static let ocrQueue = DispatchQueue(label: "io.github.kianzzz.hovertranslate.ocr", qos: .userInitiated)
 
     static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -139,14 +140,15 @@ enum TextCapture {
                 }
                 // Check the ancestry before falling back to visible pixels.
                 if elements.contains(where: isProtected) { continuation.resume(throwing: CaptureError.protectedText); return }
-                let compactRoles: Set<String> = ["AXStaticText", "AXButton", "AXMenuItem", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXHeading", "AXTextField", "AXCell", "AXTab", "AXRow", "AXImage"]
+                let compactRoles: Set<String> = ["AXStaticText", "AXButton", "AXMenuItem", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXHeading", "AXTextField", "AXCell", "AXTab", "AXRow", "AXImage", "AXToolbarButton", "AXMenuBarItem", "AXDisclosureTriangle", "AXSegmentedControl", "AXSwitch"]
                 var fallback: CapturedText?
-                for element in elements {
+                for (index, element) in elements.enumerated() {
                     let role = attribute(element, kAXRoleAttribute) as? String ?? ""
                     if role == "AXWindow" || role == "AXApplication" { break }
                     let candidates = [attribute(element, kAXValueAttribute) as? String,
                                       attribute(element, kAXTitleAttribute) as? String,
-                                      attribute(element, kAXDescriptionAttribute) as? String]
+                                      attribute(element, kAXDescriptionAttribute) as? String,
+                                      attribute(element, kAXHelpAttribute) as? String]
                     guard let raw = candidates.compactMap({ $0 }).first(where: { !TextLogic.clean($0).isEmpty }) else { continue }
                     let text = TextLogic.clean(raw)
                     guard let rect = bounds(element), rect.insetBy(dx: -4, dy: -4).contains(point) else { continue }
@@ -174,7 +176,11 @@ enum TextCapture {
                         if !word || text.split(whereSeparator: { $0.isWhitespace }).count == 1 {
                             // Preserve complete static paragraphs when AX exposes no character
                             // position; controls keep their own labels as before.
-                            if fallback == nil { fallback = CapturedText(text: text, bounds: rect, method: "系统取词 · 文字块 / 控件") }
+                            if fallback == nil {
+                                let container = ["AXRow", "AXCell", "AXImage"].contains(role)
+                                fallback = CapturedText(text: text, bounds: rect, method: "系统取词 · 文字块 / 控件",
+                                                        needsLineCheck: index > 0 || container || rect.height > 40)
+                            }
                         }
                     }
                 }
@@ -194,15 +200,30 @@ enum TextCapture {
                           y: min(max(point.y - height / 2, display.minY), display.maxY - height),
                           width: width, height: height)
         let image = try await SCScreenshotManager.captureImage(in: crop)
-        return try await recognize(image: image, region: crop, at: point, word: word)
+        return try await hoverText(image: image, region: crop, at: point, word: word)
     }
 
-    static func recognize(image: CGImage, region crop: CGRect, at point: CGPoint, word: Bool) async throws -> CapturedText? {
+    static func hoverText(image: CGImage, region: CGRect, at point: CGPoint, word: Bool) async throws -> CapturedText? {
+        if let multilingual = try await recognize(image: image, region: region, at: point, word: word, accurate: true) {
+            return multilingual
+        }
+        try Task.checkCancellation()
+        guard let quick = try await recognize(image: image, region: region, at: point, word: word),
+              await MainActor.run(body: { TextLogic.plausibleOCR(quick.text) }) else { return nil }
+        return quick
+    }
+
+    static func accurateLanguages(_ request: VNRecognizeTextRequest) throws -> [String] {
+        let supported = try request.supportedRecognitionLanguages()
+        return (["ja-JP", "ko-KR", "zh-Hans", "zh-Hant", "en-US"] + ocrLanguages.dropFirst()).filter { supported.contains($0) }
+    }
+
+    static func recognize(image: CGImage, region crop: CGRect, at point: CGPoint, word: Bool, accurate: Bool = false) async throws -> CapturedText? {
         let job = OCRJob()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CapturedText?, Error>) in
-            ocrQueue.async {
+            (accurate ? accurateQueue : ocrQueue).async {
                 do {
                     if job.cancelled { throw CancellationError() }
                     let request = job.request
@@ -213,7 +234,10 @@ enum TextCapture {
                         request.setComputeDevice(cpu, for: .main)
                     }
                     request.recognitionLanguages = TextCapture.ocrLanguages
-                    request.recognitionLevel = .fast
+                    request.minimumTextHeight = Float(min(0.02, 6 / max(1, crop.height)))
+                    request.recognitionLevel = accurate ? .accurate : .fast
+                    request.automaticallyDetectsLanguage = accurate
+                    if accurate { request.recognitionLanguages = try accurateLanguages(request) }
                     request.usesLanguageCorrection = true
                     try VNImageRequestHandler(cgImage: image).perform([request])
                     if job.cancelled { throw CancellationError() }
@@ -245,8 +269,9 @@ enum TextCapture {
                                         width: lineRegion.width * scaleX, height: lineRegion.height * scaleY).integral
                     if let lineImage = image.cropping(to: pixels) {
                         let refinement = VNRecognizeTextRequest()
-                        refinement.recognitionLevel = .fast
-                        refinement.recognitionLanguages = TextCapture.ocrLanguages
+                        refinement.recognitionLevel = accurate ? .accurate : .fast
+                        refinement.automaticallyDetectsLanguage = accurate
+                        refinement.recognitionLanguages = request.recognitionLanguages
                         refinement.usesLanguageCorrection = true
                         if let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
                             refinement.setComputeDevice(cpu, for: .main)

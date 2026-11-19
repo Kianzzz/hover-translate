@@ -11,7 +11,7 @@ final class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-final class HoverBadgePanel: NSPanel {
+final class SubtitlePanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model = AppModel()
     var window: NSWindow!
     var panel: FloatingPanel!
-    var badge: HoverBadgePanel!
+    var subtitle: SubtitlePanel!
     var statusItem: NSStatusItem!
     var monitor: HoverMonitor!
     var subscriptions = Set<AnyCancellable>()
@@ -31,18 +31,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         createPanel()
-        createBadge()
+        createSubtitle()
         createStatusItem()
         monitor = HoverMonitor(model: model)
         monitor.visibleCardFrame = { [weak self] in
             guard let panel = self?.panel, panel.isVisible else { return nil }
             return panel.frame
         }
-        monitor.showBadge = { [weak self] point, source in self?.showBadge(point, source: source) ?? .zero }
-        monitor.hideBadge = { [weak self] in self?.badge.orderOut(nil) }
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         monitor.start()
         model.showCard = { [weak self] anchor in self?.showCard(anchor) }
-        model.hideCard = { [weak self] in self?.panel.orderOut(nil) }
+        model.hideCard = { [weak self] in self?.panel.orderOut(nil); self?.subtitle.orderOut(nil) }
+        model.startScreenshot = { [weak self] in self?.screenshot() }
         model.showWindow = { [weak self] in self?.showMain() }
         model.pointerInCard = { [weak self] in self?.panel.isVisible == true && self?.panel.frame.contains(NSEvent.mouseLocation) == true }
         model.stageHover = { [weak self] capture, rect, point, demo in self?.monitor.stage(capture, sourceRect: rect, pointer: point, demo: demo) }
@@ -103,7 +104,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     try? await Task.sleep(nanoseconds: 80_000_000)
                     self.model.result = sample.1
                     self.model.phase = .result
-                    _ = self.showBadge(CGPoint(x: 400, y: 430))
                     try? await Task.sleep(nanoseconds: 80_000_000)
                     DiagnosticCheck.require(self.panel.frame.width == self.model.cardWidth)
                     DiagnosticCheck.require(self.panel.frame.height == self.model.cardHeight)
@@ -164,20 +164,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.contentView = glass
     }
 
-    func createBadge() {
-        badge = HoverBadgePanel(contentRect: CGRect(x: 0, y: 0, width: 30, height: 30),
+    func createSubtitle() {
+        subtitle = SubtitlePanel(contentRect: CGRect(x: 0, y: 0, width: 30, height: 30),
                                 styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        badge.title = "浮译 · 悬停图标"
-        badge.setAccessibilityRole(.window)
-        badge.setAccessibilityLabel("悬停翻译图标")
-        badge.isOpaque = false
-        badge.backgroundColor = .clear
-        badge.hasShadow = true
-        badge.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
-        badge.hidesOnDeactivate = false
-        badge.isReleasedWhenClosed = false
-        badge.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        badge.contentView = fixedHostingView(HoverBadgeView(), size: badge.frame.size)
+        subtitle.title = "浮译 · 悬停译文"
+        subtitle.setAccessibilityRole(.window)
+        subtitle.setAccessibilityLabel("悬停译文")
+        subtitle.isOpaque = false
+        subtitle.backgroundColor = .clear
+        subtitle.ignoresMouseEvents = true
+        subtitle.hasShadow = true
+        subtitle.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        subtitle.hidesOnDeactivate = false
+        subtitle.isReleasedWhenClosed = false
+        subtitle.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        subtitle.contentView = fixedHostingView(HoverSubtitle(model: model), size: subtitle.frame.size)
     }
 
     // AppKit owns panel geometry; asynchronous SwiftUI measurement must not
@@ -192,25 +193,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return container
     }
 
-    func showBadge(_ point: CGPoint, source: CGRect = .zero) -> CGRect {
-        let screen = NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main!
-        let rect = TextLogic.badgeFrame(pointer: point, visible: screen.visibleFrame, source: source)
-        badge.setFrame(rect, display: true)
-        badge.orderFrontRegardless()
-        return badge.frame
-    }
-
     func showCard(_ anchor: CGRect) {
+        if !model.selectionVisible {
+            panel.orderOut(nil)
+            let screen = NSScreen.screens.first { $0.frame.contains(anchor.origin) } ?? NSScreen.main!
+            let width = min(screen.visibleFrame.width - 24, max(96, min(680, ceil((model.subtitleText as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + 28)))
+            let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: width, height: 26), visible: screen.visibleFrame)
+            subtitle.setFrame(frame, display: true)
+            subtitle.orderFrontRegardless()
+            return
+        }
+        subtitle.orderOut(nil)
         let height = model.cardHeight
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: anchor.midX, y: anchor.midY)) } ?? NSScreen.main!
         let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: model.cardWidth, height: height), visible: screen.visibleFrame)
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
-        if model.method == "文字试用 · 本机翻译" { panel.makeKeyAndOrderFront(nil) }
+        if model.method == "文字试用" { panel.makeKeyAndOrderFront(nil) }
     }
 
     func resizeCard() {
-        guard panel.isVisible else { return }
+        guard panel.isVisible || subtitle.isVisible else { return }
         if model.selectionVisible {
             let old = panel.frame
             let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: old.midX, y: old.midY)) } ?? NSScreen.main!
@@ -243,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(.separator())
         menu.addItem(item("开启 / 暂停全局翻译", #selector(toggle), ""))
         menu.addItem(item("翻译选中文字  ⌃⌥T", #selector(selection), ""))
+        menu.addItem(item("截图翻译与提取文字…", #selector(screenshot), ""))
         menu.addItem(item("翻译剪贴板", #selector(clipboard), ""))
         menu.addItem(item("偏好设置…", #selector(settings), ","))
         menu.addItem(.separator())
@@ -296,6 +300,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func openMain() { showMain() }
     @objc func toggle() { model.toggleEnabled() }
     @objc func selection() { monitor.readSelection() }
+    @objc func translateSelection(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        guard let text = pasteboard.string(forType: .string), !TextLogic.clean(text).isEmpty else {
+            error.pointee = "选区没有可读取的文字。"; return
+        }
+        model.presentSelection(text)
+    }
+
+    @objc func screenshot() {
+        guard !model.capturingRegion else { return }
+        model.refreshPermissions()
+        guard model.screenPermission else { model.requestScreen(); return }
+        model.dismiss(force: true)
+        model.capturingRegion = true
+        Task {
+            defer { model.capturingRegion = false }
+            do {
+                guard let text = try await RegionCapture.text() else { return }
+                model.present(CapturedText(text: text, bounds: .zero, method: "截图 OCR"), cocoaAnchor: CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 1, height: 1)), selection: true)
+            } catch {
+                model.status = error.localizedDescription
+                showMain()
+            }
+        }
+    }
     @objc func clipboard() { model.clipboard() }
     @objc func settings() { model.settings() }
     @objc func quit() { NSApp.terminate(nil) }
@@ -314,6 +342,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct Entry {
     @MainActor static func main() {
         let args = CommandLine.arguments
+        if args.count == 3, args[1] == "--check-region-image" {
+            do { print(try RegionCapture.recognize(URL(fileURLWithPath: args[2]))); exit(0) }
+            catch { DiagnosticCheck.fail(error.localizedDescription) }
+        }
+        if args.count == 3, args[1] == "--check-ai", let provider = [AIProvider.codex, .claude].first(where: { String(describing: $0) == args[2] }) {
+            Task {
+                do { print(try await provider.translate("다음 역에서 내려 주세요.", from: "ko", to: "zh-Hans")); exit(0) }
+                catch { DiagnosticCheck.fail(error.localizedDescription) }
+            }
+            dispatchMain()
+        }
         if args.contains("--check-hover-flow") {
             Task { @MainActor in
                 let model = AppModel(checkPermissions: false)
@@ -341,75 +380,13 @@ struct Entry {
                 let monitor = HoverMonitor(model: model)
                 let pointer = CGPoint(x: 150, y: 310)
                 let source = CGRect(x: 100, y: 300, width: 300, height: 25)
-                let badge = TextLogic.badgeFrame(pointer: pointer, visible: CGRect(x: 0, y: 0, width: 1100, height: 780))
-                // Exercise approach/reversal with immediate dismissal selected.
-                let travel = HoverMonitor(model: model)
-                travel.showBadge = { _, _ in badge }
-                model.clearHover = { [weak travel] in travel?.clearCandidate() }
-                model.closeDelay = 0
-                let travelTime = Date(timeIntervalSince1970: 900)
-                travel.stage(CapturedText(text: "Test", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
-                let approaching = CGPoint(x: pointer.x + 4, y: pointer.y - 4)
-                DiagnosticCheck.require(travel.retainCandidate(at: approaching, now: travelTime), "Approaching survives zero close delay")
-                DiagnosticCheck.require(travel.retainCandidate(at: approaching, now: travelTime.addingTimeInterval(0.1)), "Brief approach pause tolerates hand jitter")
-                DiagnosticCheck.require(!travel.retainCandidate(at: CGPoint(x: approaching.x - 10, y: approaching.y + 10), now: travelTime.addingTimeInterval(0.12)), "Reversing closes even inside the old source region")
-                travel.stage(CapturedText(text: "Test", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
-                DiagnosticCheck.require(travel.retainCandidate(at: approaching, now: travelTime))
-                DiagnosticCheck.require(!travel.retainCandidate(at: approaching, now: travelTime.addingTimeInterval(0.21)), "Approach grace expires when movement stops")
                 var opened = 0
-                monitor.showBadge = { _, _ in badge }
                 model.showCard = { _ in opened += 1 }
-                model.clearHover = { [weak monitor] in monitor?.clearCandidate() }
-                monitor.stage(CapturedText(text: "Keep in Dock", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
-                DiagnosticCheck.require(opened == 0, "Text hover must only show the badge")
-                DiagnosticCheck.require(monitor.retainCandidate(at: pointer) && opened == 0, "Source hover must not translate")
-                let center = CGPoint(x: badge.midX, y: badge.midY)
-                DiagnosticCheck.require(monitor.retainCandidate(at: center) && opened == 1, "Entering the badge must open without a click")
-                DiagnosticCheck.require(monitor.retainCandidate(at: center) && opened == 1, "Badge hover must not launch duplicate translations")
-                let outside = CGPoint(x: 900, y: 700)
-                let now = Date(timeIntervalSince1970: 1000)
-                model.closeDelay = 0.3
-                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now), "Keep the configured grace period")
-                DiagnosticCheck.require(!monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.31)), "Dismiss after the configured delay")
-                let frame = TextLogic.panelFrame(anchor: badge, size: CGSize(width: 360, height: 84), visible: CGRect(x: 0, y: 0, width: 1100, height: 780))
-                monitor.visibleCardFrame = { frame }
-                let inside = CGPoint(x: frame.midX, y: frame.midY)
-                @MainActor func stageAgain() {
-                    monitor.stage(CapturedText(text: "Keep in Dock", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
-                    DiagnosticCheck.require(monitor.retainCandidate(at: center, now: now))
-                }
-                model.closeDelay = 0
-                stageAgain()
-                DiagnosticCheck.require(monitor.retainCandidate(at: CGPoint(x: badge.maxX + 6, y: badge.minY - 6), now: now), "Keep the bridge before entering the popup")
-                DiagnosticCheck.require(monitor.retainCandidate(at: inside, now: now), "Keep the popup while inside")
-                DiagnosticCheck.require(!monitor.retainCandidate(at: pointer, now: now), "Zero delay closes immediately, even back over the source")
-                model.closeDelay = 0.3
-                stageAgain()
-                DiagnosticCheck.require(monitor.retainCandidate(at: inside, now: now))
-                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now), "Start delayed close on exit")
-                DiagnosticCheck.require(monitor.retainCandidate(at: inside, now: now.addingTimeInterval(0.2)), "Reentry cancels pending close")
-                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.3)))
-                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.59)), "Reentry resets the full close delay")
-                DiagnosticCheck.require(!monitor.retainCandidate(at: outside, now: now.addingTimeInterval(0.61)), "Close when the restarted delay expires")
-                stageAgain()
-                model.pinned = true
-                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(10)), "Pinned cards ignore automatic close")
-                model.dismiss(force: true)
-                model.present(CapturedText(text: "Selected text", bounds: .zero, method: "test"), cocoaAnchor: source, selection: true)
-                DiagnosticCheck.require(monitor.retainSelection(), "Selection toolbar must survive pointer movement across the gap, even with zero close delay")
-                DiagnosticCheck.require(model.target == "zh-Hans" && model.phase != .idle, "Selections translate into the preferred language immediately")
-                model.dismiss(force: true)
-                // Mouse selections stage a persistent badge first, regardless of language.
-                var selectionOpened = 0
-                model.showCard = { _ in selectionOpened += 1 }
-                monitor.stage(CapturedText(text: "你好，世界", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true, selection: true)
-                DiagnosticCheck.require(monitor.hasSelectionBadge && selectionOpened == 0, "Selecting native text shows the badge without opening")
-                DiagnosticCheck.require(monitor.retainCandidate(at: outside, now: now.addingTimeInterval(5)), "The selection badge ignores pointer movement and close delay")
-                DiagnosticCheck.require(monitor.retainCandidate(at: center, now: now) && selectionOpened == 1 && model.selectionVisible, "Entering the selection badge opens the selection card")
-                DiagnosticCheck.require(model.target == "en", "Native Chinese falls back to English")
-                DiagnosticCheck.require(monitor.retainSelection(), "Selection result must remain available for copy and replacement")
-                model.dismiss(force: true)
-                DiagnosticCheck.require(!monitor.retainSelection(), "Explicit dismissal releases the selection toolbar")
+                model.clearHover = { monitor.clearCandidate() }
+                monitor.stage(CapturedText(text: "Test", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
+                DiagnosticCheck.require(opened == 1 && monitor.retainCandidate(at: pointer), "Hover translates immediately after dwell")
+                DiagnosticCheck.require(!monitor.retainCandidate(at: .zero), "Leaving the source dismisses the subtitle")
+                monitor.visibleCardFrame = { source }
                 let destination = ReplacementTarget(element: AXUIElementCreateApplication(1), pid: 1,
                     edit: SelectionEdit(value: "你好，世界！", selected: "你好，世界！", range: NSRange(location: 0, length: 6)))
                 model.present(CapturedText(text: "你好，世界！", bounds: .zero, method: "test"),
@@ -446,7 +423,6 @@ struct Entry {
                 model.dismiss(force: true)
                 // Polling runs only while it is needed.
                 let idle = HoverMonitor(model: model)
-                idle.showBadge = { _, _ in badge }
                 model.enabled = false
                 idle.updatePolling()
                 DiagnosticCheck.require(!idle.isPolling, "A paused app with nothing on screen does not poll")
@@ -478,8 +454,8 @@ struct Entry {
                 DiagnosticCheck.require(pasteKey != nil, "The current keyboard layout resolves the ⌘V key")
                 print("Replacement checks passed: edge whitespace, transient clipboard lease, restore safety, paste key \(pasteKey!) for the current layout.")
                 print("Polling checks passed: idle when paused, active for badges and enabled translation.")
-                print("Selection-card checks passed: preview gating, selection badge, native fallback, read-only mode, busy state, invalid target and clipboard safety.")
-                print("Capture safety and hover-flow checks passed: own-element and own-selection rejection, remote element acceptance, permission publication, badge opening, close delay, bridge, reentry and pinned cards.")
+                print("Selection-card checks passed: preview gating, native fallback, read-only mode, busy state, invalid target and clipboard safety.")
+                print("Capture safety and hover-flow checks passed: own-element and own-selection rejection, remote element acceptance, permission publication, subtitle opening and dismissal.")
                 exit(0)
             }
             dispatchMain()
@@ -490,7 +466,7 @@ struct Entry {
                       let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { print("Cannot read image"); exit(1) }
                 do {
                     let region = CGRect(x: 0, y: 0, width: image.width, height: image.height)
-                    let result = try await TextCapture.recognize(image: image, region: region, at: CGPoint(x: x, y: y), word: args[1] == "--check-word-image")
+                    let result = try await TextCapture.hoverText(image: image, region: region, at: CGPoint(x: x, y: y), word: args[1] == "--check-word-image")
                     let data = try JSONSerialization.data(withJSONObject: ["text": result?.text as Any? ?? NSNull()], options: [.sortedKeys])
                     print(String(decoding: data, as: UTF8.self))
                     exit(0)
@@ -519,6 +495,9 @@ struct Entry {
                     do {
                         let engine = LocalTranslator()
                         print("English → Chinese: \(try await engine.translate("Good design makes complex things feel simple.", from: "en", to: "zh-Hans"))")
+                        if await availability.status(from: Locale.Language(identifier: "ja"), to: Locale.Language(identifier: "zh-Hans")) == .installed {
+                            print("Japanese → Chinese: \(try await engine.translate("次の駅で降りてください。", from: "ja", to: "zh-Hans"))")
+                        }
                         print("Chinese → English: \(try await engine.translate("保持好奇，总有更多值得发现。", from: "zh-Hans", to: "en"))")
                     } catch { print("Translation failed: \(error.localizedDescription)"); exit(1) }
                 }

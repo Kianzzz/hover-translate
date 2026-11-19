@@ -27,7 +27,7 @@ enum TextLogic {
 
     /// Script decides CJK; the statistical recognizer only chooses among the
     /// offered languages, and Latin text must be clearly non-English to switch.
-    static func language(of text: String) -> String {
+    static func language(of text: String, japaneseKanji: Bool = false) -> String {
         func count(_ ranges: [ClosedRange<UInt32>]) -> Int {
             text.unicodeScalars.filter { scalar in ranges.contains { $0.contains(scalar.value) } }.count
         }
@@ -36,9 +36,10 @@ enum TextLogic {
         let hangul = count([0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF])
         let han = count([0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF])
         let latin = count([0x41...0x5A, 0x61...0x7A, 0xC0...0x24F])
-        if kana > 0, kana + han >= latin { return "ja" }
-        if hangul > 0, hangul >= latin { return "ko" }
+        if kana > 0, kana >= hangul { return "ja" }
+        if hangul > 0 { return "ko" }
         if han > 0, han * 2 > latin {
+            if japaneseKanji { return "ja" }
             let recognizer = NLLanguageRecognizer()
             recognizer.languageConstraints = [.simplifiedChinese, .traditionalChinese]
             recognizer.processString(text)
@@ -93,9 +94,11 @@ enum TextLogic {
     }
 
     /// Hover only offers translation for real words outside the native language.
-    static func isForeign(_ text: String, native: String) -> Bool {
-        text.range(of: "\\p{L}{2,}", options: .regularExpression) != nil
-            && baseLanguage(language(of: text)) != baseLanguage(native)
+    static func isForeign(_ text: String, native: String, japaneseKanji: Bool = false) -> Bool {
+        let source = language(of: text, japaneseKanji: japaneseKanji)
+        guard !sameLanguage(source, native) else { return false }
+        if source == "ja" || source == "ko" { return text.contains(where: \.isLetter) }
+        return text.range(of: "\\p{L}{2,}", options: .regularExpression) != nil
     }
 
     /// Text already in the preferred language falls back to native, then English.
@@ -280,6 +283,8 @@ struct CapturedText: Sendable {
     let text: String
     let bounds: CGRect
     let method: String
+    // A container label may describe the whole thread rather than the hovered line.
+    var needsLineCheck = false
 }
 
 struct SelectionEdit: Sendable {

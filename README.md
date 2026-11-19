@@ -4,12 +4,13 @@
 
 Native macOS hover and selection translator built with SwiftUI, AppKit, Vision, Accessibility and Apple Translation. Text and image recognition run locally; no third-party translation API or API key is required.
 
-> 当前为 v0.4.0 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
+> 当前为 v0.5.5 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
 
 ## 功能
 
-- **悬停翻译**：在非母语文字上停留后出现小“译”图标，鼠标移入图标展开译文，无需选中或点击。母语文字悬停不出现图标。
-- **选区翻译**：选中任意语言的文字后先出现“译”图标，移入后打开浮窗；`⌃⌥T` 与菜单栏直接打开。浮窗只显示原文与译文，可复制或固定。
+- **悬停翻译**　在外语文字上停留后，原文下方显示一行译文。移开鼠标后收起。
+- 日语和韩语支持单字按钮与英文品牌混排。日文纯汉字菜单可在偏好设置开启「纯汉字按日语翻译」。
+- **选区翻译**　选中文字，右键 → 服务 → 浮译。也可按 ⌃⌥T。
 - **语言设置**：可设置母语和译文语言（默认均为简体中文）。原文语种自动识别；原文已是目标语言时，改译成母语或英文。
 - **语言包管理**：偏好设置中可查看各语种语言包并下载，或跳转到系统设置下载（可看到进度）。浮窗遇到缺失的语言包时提供入口。
 - **输入框替换**：确认选区来自可安全编辑的输入框后，显示“替换选中文字”。先预览译文，点击后才替换选中的部分；成功后关闭浮窗并交回输入焦点，可尝试在原应用按 `⌘Z` 撤销。
@@ -17,7 +18,7 @@ Native macOS hover and selection translator built with SwiftUI, AppKit, Vision, 
 - **可调触发**：悬停等待 300–1500 ms，移开后的关闭等待 0–1000 ms。选区浮窗不因鼠标移开原文而自动关闭。
 - **完整语境**：优先提取鼠标所在句子；软换行会合并，无法定位字符的独立文字块保留完整内容。OCR 按行距与左对齐合并同段文字，再提取所在句子。
 - **长译文**：正文按内容增高，最高 260 点；更长内容在浮窗内滚动阅读。
-- **外观**：原文 + 译文两段式磨砂浮窗；绿色悬停图标随系统深浅外观自动调整明暗。
+- **截图翻译**　菜单栏 → 截图翻译与提取文字，拖选区域后查看译文，可分别复制原文和译文。Esc 取消框选。
 
 ![可编辑选区浮窗样式](docs/images/selection-translation.png)
 
@@ -46,14 +47,14 @@ open "$HOME/Applications/浮译.app"
 可通过环境变量改为独立测试包，不影响已有安装：
 
 ```sh
-HOVER_TRANSLATE_BUILD_DIR="$HOME/Library/Caches/HoverTranslate/public-build" HOVER_TRANSLATE_APP_DIR="$HOME/Library/Caches/HoverTranslate/public-test.bundle" zsh scripts/build-app.sh
+HOVER_TRANSLATE_SIGNING_IDENTITY=- HOVER_TRANSLATE_BUILD_DIR="$HOME/Library/Caches/HoverTranslate/public-build" HOVER_TRANSLATE_APP_DIR="$HOME/Library/Caches/HoverTranslate/public-test.bundle" zsh scripts/build-app.sh
 ```
 
 临时包使用 `.bundle` 后缀，以减少测试包混入 LaunchServices 和系统授权列表的情况。实际运行请使用正常安装的 `.app`。
 
 公开版默认 bundle ID 为 `io.github.kianzzz.hovertranslate`。自行分发时可修改 `Info.plist` 中的标识；不同标识、签名或安装路径可能需要独立授权。本仓库暂不提供预编译应用下载，构建未做 Developer ID 签名或公证。
 
-**签名与授权保持**：临时签名（ad-hoc）每次构建都会改变，系统会让已给的辅助功能与屏幕录制授权失效。`build-app.sh` 会优先使用钥匙串中名为 `HoverTranslate Local Signing` 的代码签名证书（可用 `HOVER_TRANSLATE_SIGNING_IDENTITY` 指定其他名称），此时授权按 bundle ID + 证书识别，重新构建后仍然有效；找不到证书时回退为临时签名并提示。可以用钥匙串访问的“证书助理 → 创建证书”生成一张类型为“代码签名”的自签名证书。
+**签名与授权保持**：临时签名（ad-hoc）每次构建都会改变，系统会让已给的辅助功能与屏幕录制授权失效。`build-app.sh` 会优先使用钥匙串中名为 `HoverTranslate Local Signing` 的代码签名证书（可用 `HOVER_TRANSLATE_SIGNING_IDENTITY` 指定其他名称），此时授权按 bundle ID + 证书识别，重新构建后仍然有效；缺少可用签名身份时会在安装前停止；后续更新还会验证新版本是否满足原安装的签名要求。可以用钥匙串访问的“证书助理 → 创建证书”生成一张类型为“代码签名”的自签名证书。
 
 ## 权限准备
 
@@ -70,8 +71,8 @@ HOVER_TRANSLATE_BUILD_DIR="$HOME/Library/Caches/HoverTranslate/public-build" HOV
 ## 使用方式
 
 - 菜单栏可开启、暂停或退出全局翻译。关闭主窗口不会退出应用。
-- 悬停外语 → 移入“译”图标 → 查看译文。默认等待 600 ms，默认移开后立即收起；固定浮窗除外。
-- 选中文字 → 移入“译”图标 → 查看原文与译文。也可以用 `⌃⌥T`（Control + Option + T）直接打开选区浮窗。
+- 悬停默认等待 600 ms，移开默认立即收起。等待时间可调整。
+- 右键服务取决于来源应用对 macOS 服务的支持，也可以按 `⌃⌥T` 打开选区浮窗。
 - 可编辑输入框 → 确认译文 → 点击“替换选中文字”。翻译未完成、结果与原文相同或替换进行中，不允许提交替换。
 - 替换后在原输入框按 `⌘Z`，使用原编辑器的撤销记录。是否能撤销取决于目标应用，尤其需要验证网页富文本编辑器。
 - 输入框或选区已改变时拒绝旧替换，不会自动重新选中旧文字；无法确认替换结果时不重试，避免重复插入。
@@ -80,8 +81,8 @@ HOVER_TRANSLATE_BUILD_DIR="$HOME/Library/Caches/HoverTranslate/public-build" HOV
 
 ## 隐私与数据处理
 
-- 应用自身不向第三方翻译服务上传文字或截图，不接入分析统计。
-- 识别使用 Accessibility / Vision，翻译使用 Apple Translation；语言包准备可能需要联网下载。
+- 默认使用 Apple 本地语言包。偏好设置中可检测 Codex 的 ChatGPT 登录和 Claude Code 的 Claude.ai 登录，并选择使用其服务。AI 翻译会将文字发送给对应提供商，使用该账号额度。截图只在本机识别。
+- 识别使用 Accessibility / Vision。Apple 离线语言包首次下载需要联网。
 - 不自动监视剪贴板。手动翻译剪贴板与复制译文均由用户触发。
 - 点击替换时临时借用剪贴板，并标记为临时内容，剪贴板管理工具不会记录；确认目标应用已读取粘贴后恢复（最多等待 3 秒），期间用户主动复制的新内容不会被覆盖。
 - 翻译缓存与当前选区只留在进程内存，不记录翻译历史或持久化截图。设置通过 UserDefaults 保存。
@@ -95,7 +96,7 @@ zsh scripts/test.sh
 "$HOME/Applications/浮译.app/Contents/MacOS/HoverTranslate" --check-engine
 ```
 
-- `test.sh`：直接编译执行 94 项文本、语种识别、坐标、图标位置、浮窗尺寸、选区手势与选区替换边界检查。
+- `test.sh`：直接编译执行 100 项文本、语种识别、坐标、图标位置、浮窗尺寸、选区手势与选区替换边界检查。
 - `--check-hover-flow`：验证取词安全、悬停生命周期、选区浮窗保留、替换按钮状态、按需轮询、临时剪贴板标记与恢复（使用独立临时剪贴板）和无效目标的剪贴板安全；不读取或改写用户设置，不执行对真实输入框的替换。
 - `python3 scripts/check-ocr-context.py <HoverTranslate可执行文件路径>`：使用仓库内合成文字图片验证真实 Vision 跨行 OCR、旁栏隔离、段落间隔、菜单与空白命中；需要 Python 3，不读取屏幕。
 - `--check-engine`：检查已安装的语言包，并在可用时执行真实中英双向翻译。
@@ -109,10 +110,9 @@ zsh scripts/test.sh
 
 - 部分应用不开放 Accessibility 文字、选区或安全编辑信息，因此无法直接取词或提供替换按钮。
 - OCR 读取鼠标附近最多 1400 × 720 点的可见区域，按布局合并跨行句子；屏幕外或识别区域外的内容无法补全。多栏、缩进、密集列表和细小、模糊或手写文字仍可能识别不准。
-- 本机 OCR 使用快速识别及 CPU 处理路径，以降低模型初始化等待；仅识别英、法、德、西、意、葡等拉丁字母语言。中日韩等文字依赖 Accessibility；系统已读到文字时不再 OCR，OCR 结果需通过拼写检查才会采用。
+- 悬停和截图 OCR 使用 Vision 多语言准确识别，按当前系统支持的语言启用中、日、韩及多种拉丁文字。
 - 应用提供的选区边界可能不准确；屏幕边缘可能限制浮窗摆放。选区浮窗会保留至外部点击、滚动、继续输入或主动关闭。
 - 语种识别：中日韩按文字字符判断；拉丁字母短文本默认视为英文，至少 4 个词且识别置信度足够高才判为其他语言。极短或混排文字仍可能误判。可用语种取决于 Apple Translation 与已下载的语言包。
-- 项目仅调用 macOS 公共框架；系统授权、语言包和目标应用行为不受本工具控制。
 
 ## 项目结构
 

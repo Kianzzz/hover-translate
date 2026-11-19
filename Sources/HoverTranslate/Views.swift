@@ -114,7 +114,7 @@ struct MainView: View {
             nav("settings", "偏好设置", "slider.horizontal.3")
             Spacer()
             powerCard
-            Text("v0.4.0 · 本地处理").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+            Text("v0.5.5 · \(model.provider.rawValue)").font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 .padding(.top, 14).padding(.horizontal, 6)
         }.padding(.horizontal, 14).padding(.top, 52).padding(.bottom, 20)
             .frame(width: 212).background(Palette.sidebar)
@@ -128,7 +128,7 @@ struct MainView: View {
                 Toggle("全局翻译", isOn: Binding(get: { model.enabled }, set: { _ in model.toggleEnabled() }))
                     .toggleStyle(.switch).labelsHidden().tint(Palette.green).controlSize(.mini)
             }
-            Text(model.enabled ? "悬停外语、选中文字即可翻译" : "已暂停，不会读取屏幕文字")
+            Text(model.enabled ? "悬停外语即可查看译文" : "已暂停，不会读取屏幕文字")
                 .font(.system(size: 10)).foregroundStyle(Palette.secondary).lineSpacing(2)
             HStack(spacing: 6) {
                 Text("母语 " + TextLogic.displayName(model.nativeLanguage))
@@ -175,29 +175,32 @@ struct HomeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             SectionHeading(eyebrow: "开始使用", title: "停一下，就读懂。",
-                           subtitle: "悬停外语出现“译”图标，选中任意文字也能翻译。原文语种自动识别，默认译成\(TextLogic.displayName(model.targetLanguage))。")
+                           subtitle: "悬停查看一行译文，选中文字后可右键翻译。原文语种自动识别，默认译成\(TextLogic.displayName(model.targetLanguage))。")
             HStack(alignment: .top, spacing: 18) {
                 browserPreview
                 VStack(alignment: .leading, spacing: 20) {
-                    step("1", "悬停外语", "停留片刻出现“译”图标；\(TextLogic.displayName(model.nativeLanguage))文字不打扰。")
-                    step("2", "选中文字", "任何语言选中后都会出现图标。")
-                    step("3", "移入图标", "自动展开原文与译文，无需点击。")
+                    step("1", "悬停外语", "停留片刻显示一行译文；\(TextLogic.displayName(model.nativeLanguage))文字不打扰。")
+                    step("2", "选中文字", "在右键菜单或其「服务」中点「浮译」。")
+                    step("3", "截图翻译", "从菜单栏框选区域，提取文字并翻译。")
                     Spacer(minLength: 0)
+                    Button { model.startScreenshot?() } label: {
+                        Label("截图翻译…", systemImage: "viewfinder")
+                    }.buttonStyle(SoftButton(prominent: true))
                     Button { model.page = "try" } label: {
                         HStack(spacing: 6) { Text("试试自己的文字"); Image(systemName: "arrow.right") }
-                    }.buttonStyle(SoftButton(prominent: true))
+                    }.buttonStyle(SoftButton())
                 }.padding(.vertical, 6).frame(width: 214, alignment: .leading)
             }
             HStack(spacing: 14) {
                 feature("globe", "多语种原文", "自动识别英、日、韩、法、德等语言")
                 feature("text.cursor", "选区翻译与替换", "输入框先看译文，再决定是否替换")
-                feature("lock", "全部本机完成", "离线翻译，不上传文字与截图")
+                feature("lock", "翻译服务", "默认离线，可选本机已登录的 AI 服务")
             }
             HStack(spacing: 14) {
                 IconTile(symbol: ready ? "checkmark.seal.fill" : "exclamationmark.triangle", size: 36)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(ready ? "取词、识图与语言包均已就绪" : "还差一步 · 完成权限与语言包准备").font(.system(size: 13, weight: .semibold))
-                    Text("取词 \(model.accessibility ? "已授权" : "待授权")  ·  识图 \(model.screenPermission ? "已授权" : "待授权")  ·  语言包 \(model.languageReady ? "已就绪" : "待下载")")
+                    Text(ready ? "取词、识图与翻译均已就绪" : "还差一步 · 检查权限与翻译服务").font(.system(size: 13, weight: .semibold))
+                    Text("取词 \(model.accessibility ? "已授权" : "待授权")  ·  识图 \(model.screenPermission ? "已授权" : "待授权")  ·  \(model.provider.rawValue)")
                         .font(.system(size: 11)).foregroundStyle(Palette.secondary)
                 }
                 Spacer()
@@ -206,7 +209,7 @@ struct HomeView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
-    private var ready: Bool { model.accessibility && model.languageReady && model.screenPermission && model.ocrEnabled }
+    private var ready: Bool { model.accessibility && (model.provider == .apple ? model.languageReady : model.availableProviders.contains(model.provider)) && model.screenPermission && model.ocrEnabled }
 
     private var browserPreview: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -220,12 +223,14 @@ struct HomeView: View {
                 .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
             VStack(alignment: .leading, spacing: 14) {
                 Text("THE QUIET INTERNET").font(.system(size: 9, weight: .semibold)).tracking(1.6).foregroundStyle(Palette.secondary)
+                    .modifier(PreviewHover(model: model, text: "THE QUIET INTERNET"))
                 Text("Read without breaking\nyour flow.").font(.system(size: 24, weight: .semibold, design: .serif)).lineSpacing(1)
+                    .modifier(PreviewHover(model: model, text: "Read without breaking your flow."))
                 DemoSentence(model: model, english: "Good design makes complex things feel simple.")
                 DemoSentence(model: model, english: "Stay curious. There is always more to discover.")
                 HStack(spacing: 5) {
                     Image(systemName: "cursorarrow.rays").font(.system(size: 10))
-                    Text("悬停上面的句子，再移到“译”图标").font(.system(size: 10, weight: .medium))
+                    Text("在上面的句子停留片刻").font(.system(size: 10, weight: .medium))
                 }.foregroundStyle(Palette.green).padding(.top, 2)
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }.background(Palette.surface).clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -255,26 +260,35 @@ struct HomeView: View {
 
 @MainActor
 final class DemoInteraction: ObservableObject {
-    @Published var hovering = false
     var task: Task<Void, Never>?
 }
 
 struct DemoSentence: View {
     @ObservedObject var model: AppModel
     let english: String
-    @StateObject private var interaction = DemoInteraction()
     var body: some View {
         Text(english).font(.system(size: 13)).lineSpacing(5)
             .frame(maxWidth: .infinity, alignment: .leading).padding(9)
-            .background(interaction.hovering ? Palette.lime.opacity(0.55) : Palette.paper)
+            .background(Palette.paper)
             .clipShape(RoundedRectangle(cornerRadius: 7))
+            .modifier(PreviewHover(model: model, text: english))
+    }
+}
+
+private struct PreviewHover: ViewModifier {
+    @ObservedObject var model: AppModel
+    let text: String
+    @StateObject private var interaction = DemoInteraction()
+
+    func body(content: Content) -> some View {
+        content.textSelection(.enabled)
             .background(HoverSampleSensor { inside, rect in
-                interaction.hovering = inside; interaction.task?.cancel()
+                interaction.task?.cancel()
                 if inside {
                     interaction.task = Task { @MainActor in
                         try? await Task.sleep(nanoseconds: UInt64(model.delay * 1_000_000_000))
                         guard !Task.isCancelled else { return }
-                        model.preview(english, bounds: rect)
+                        model.preview(text, bounds: rect)
                     }
                 }
             })
@@ -313,54 +327,28 @@ struct HoverSampleSensor: NSViewRepresentable {
                 debugTicks += 1
                 if debugTicks % 10 == 0 { NSLog("HTSensor rect=%@ point=%@ active=%d key=%d hidden=%d", NSStringFromRect(rect), NSStringFromPoint(NSEvent.mouseLocation), NSApp.isActive, window.isKeyWindow, isHiddenOrHasHiddenAncestor) }
             }
-            let nowInside = NSApp.isActive && window.isKeyWindow && !isHiddenOrHasHiddenAncestor && NSEvent.pressedMouseButtons == 0 && rect.contains(NSEvent.mouseLocation)
+            let point = NSEvent.mouseLocation
+            let nowInside = window.isVisible && !isHiddenOrHasHiddenAncestor && NSEvent.pressedMouseButtons == 0
+                && rect.contains(point) && NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0) == window.windowNumber
             if nowInside != inside { inside = nowInside; changed?(inside, rect) }
         }
         deinit { polling?.invalidate() }
     }
 }
 
-// Green “墨色小点” badges invert their surface against the system appearance.
-private enum GreenBadgeLayout {
-    static let visibleSize: CGFloat = 28
-}
-
-private enum GreenBadgePalette {
-    static func ink(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0.16, green: 0.32, blue: 0.25) : Color(red: 0.92, green: 0.97, blue: 0.93)
-    }
-    static func surface(_ scheme: ColorScheme) -> [Color] {
-        scheme == .dark
-            ? [Color(red: 0.91, green: 0.96, blue: 0.92), Color(red: 0.79, green: 0.88, blue: 0.82)]
-            : [Color(red: 0.24, green: 0.39, blue: 0.31), Color(red: 0.13, green: 0.26, blue: 0.20)]
-    }
-}
-
-private struct GreenBadgeSurface: View {
-    @Environment(\.colorScheme) private var scheme
-    var circular = false
+struct HoverSubtitle: View {
+    @ObservedObject var model: AppModel
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: circular ? 50 : 9, style: .continuous)
-        LinearGradient(colors: GreenBadgePalette.surface(scheme), startPoint: .topLeading, endPoint: .bottomTrailing)
-            .clipShape(shape)
-            .overlay(shape.stroke(Color.white.opacity(scheme == .dark ? 0.65 : 0.16), lineWidth: 0.6))
-            .allowsHitTesting(false)
+        Text(model.subtitleText).font(.system(size: 12)).lineLimit(1)
+            .padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.regularMaterial, in: Capsule())
     }
 }
 
-struct HoverBadgeView: View {
-    @Environment(\.colorScheme) private var scheme
-    var body: some View {
-        Text("译").font(.system(size: 13, weight: .light))
-            .foregroundStyle(GreenBadgePalette.ink(scheme))
-            .frame(width: GreenBadgeLayout.visibleSize, height: GreenBadgeLayout.visibleSize).background(GreenBadgeSurface(circular: true))
-            .frame(width: 30, height: 30).contentShape(Rectangle())
-            .accessibilityLabel("悬停翻译，鼠标移入展开译文")
-    }
-}
 
 struct TryView: View {
     @ObservedObject var model: AppModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             SectionHeading(eyebrow: "翻译试用", title: "输入任意语言试试。",
@@ -371,13 +359,12 @@ struct TryView: View {
                     Spacer()
                     Text("\(model.manualText.count) / 8,000").font(.system(size: 11, design: .rounded)).foregroundStyle(Palette.secondary)
                 }.padding(.bottom, 12)
-                TextEditor(text: $model.manualText).font(.system(size: 16)).lineSpacing(6)
-                    .scrollContentBackground(.hidden).padding(14).frame(height: 200)
+                SelectionEditor(text: $model.manualText, translate: model.presentSelection)
+                    .padding(14).frame(height: 200)
                     .background(Palette.paper).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line, lineWidth: 1))
-                    .accessibilityLabel("要翻译的原文")
                 HStack {
-                    Text("Apple 本机翻译 · 译成\(TextLogic.displayName(model.targetLanguage))").font(.system(size: 11)).foregroundStyle(Palette.secondary)
+                    Text("\(model.provider.rawValue) · 译成\(TextLogic.displayName(model.targetLanguage))").font(.system(size: 11)).foregroundStyle(Palette.secondary)
                     Spacer()
                     Button { model.manualTranslate() } label: { Label("打开翻译浮窗", systemImage: "arrow.up.right") }
                         .buttonStyle(SoftButton(prominent: true)).disabled(TextLogic.clean(model.manualText).isEmpty)
@@ -387,7 +374,7 @@ struct TryView: View {
                 IconTile(symbol: "text.cursor", size: 34)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("在其他应用里试试选区翻译").font(.system(size: 13, weight: .semibold))
-                    Text("开启全局翻译后，选中文字会出现“译”图标，鼠标移入即展开译文；可编辑输入框还可点击“替换选中文字”，再按 ⌘Z 撤销。也可以选中后按 ⌃⌥T 直接打开。")
+                    Text("选中文字后右键，点「浮译」；部分应用将它放在「服务」里。也可以选中后按 ⌃⌥T 直接打开。")
                         .font(.system(size: 12)).foregroundStyle(Palette.secondary).lineSpacing(4)
                     Text("应用未开放选区时：复制文字 → 菜单栏“翻译剪贴板”。")
                         .font(.system(size: 11)).foregroundStyle(Palette.secondary)
@@ -405,9 +392,20 @@ struct SettingsView: View {
             SectionHeading(eyebrow: "偏好设置", title: "按你的习惯来。", subtitle: "设置母语和译文语言，再授权全局取词。随时可以从菜单栏暂停。")
             Panel {
                 cardTitle("语言")
-                row("person.wave.2", "母语", "悬停时不为母语文字显示图标；选中母语文字仍可翻译。") {
+                row("sparkles", "翻译服务", "选用 AI 后，待翻译的文字会发送至对应服务并使用账号额度。截图在本机识别。") {
+                    Picker("翻译服务", selection: $model.provider) {
+                        ForEach(AIProvider.allCases.filter { model.availableProviders.contains($0) || model.provider == $0 }, id: \.self) { p in
+                            Text(p.rawValue).tag(p)
+                        }
+                    }.labelsHidden()
+                    Button("检测登录") { Task { await model.refreshProviders() } }
+                }
+                Divider().padding(.vertical, 14)
+                row("person.wave.2", "母语", "悬停时跳过母语文字；选中母语文字仍可翻译。") {
                     languagePicker("母语", $model.nativeLanguage)
                 }
+                Divider().padding(.vertical, 14)
+                toggleRow("character.book.closed", "纯汉字按日语翻译", "阅读日文时可开启，例如「受付」。开启后，中文汉字也可能按日语处理。", $model.japaneseKanji)
                 Divider().padding(.vertical, 14)
                 row("character.bubble", "译成", "原文语种自动识别。原文已是该语言时，改译成母语或英文。") {
                     languagePicker("译成", $model.targetLanguage)
@@ -438,13 +436,11 @@ struct SettingsView: View {
             }
             Panel {
                 cardTitle("触发与识别")
-                toggleRow("cursorarrow.rays", "悬停翻译", "悬停外语先出现“译”图标，移入图标后展开译文。", $model.hoverEnabled)
-                Divider().padding(.vertical, 14)
-                toggleRow("text.cursor", "选中文字后显示图标", "移入图标打开译文；可编辑输入框提供替换按钮。", $model.selectionEnabled)
+                toggleRow("cursorarrow.rays", "悬停翻译", "停留后在原文下显示一行译文。", $model.hoverEnabled)
                 Divider().padding(.vertical, 14)
                 toggleRow("text.viewfinder", "允许本机 OCR 补充识别", "需要屏幕录制权限；识别范围限于鼠标附近。", $model.ocrEnabled)
                 Divider().padding(.vertical, 14)
-                row("timer", "图标出现等待", "鼠标停留多久后出现“译”图标。") {
+                row("timer", "悬停等待", "鼠标停留多久后显示译文。") {
                     slider($model.delay, 0.3...1.5, 0.1, "\(Int(model.delay * 1000)) ms")
                 }
                 Divider().padding(.vertical, 14)
@@ -491,6 +487,11 @@ struct SettingsView: View {
                 Button { Task { await model.refreshLanguage() } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).foregroundStyle(Palette.secondary).help("重新检查语言包")
             }
+            Text(["ja", "ko"].filter { packLanguages.contains($0) }.map { id in
+                let state = model.packStatus[id]
+                let label = state == nil ? "检查中" : state == .installed ? "已下载" : state == .unsupported ? "不支持" : "待下载"
+                return TextLogic.displayName(id) + " · " + label
+            }.joined(separator: "　")).font(.system(size: 11)).foregroundStyle(Palette.secondary)
             Text(installed.isEmpty ? "还没有已下载的语种。" : "已下载：" + installed.map(TextLogic.displayName).joined(separator: "、"))
                 .font(.system(size: 11)).foregroundStyle(Palette.secondary)
         }
@@ -596,10 +597,17 @@ struct TranslationCard: View {
             HStack(spacing: 6) {
                 Text("译").font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 17, height: 17).background(MistCardPalette.accent).clipShape(Circle())
-                Text("\(TextLogic.displayName(model.sourceLanguage)) → \(TextLogic.displayName(model.target))")
-                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(MistCardPalette.secondary).lineLimit(1)
+                languageMenu(source: true)
+                Text("→").font(.system(size: 10))
+                languageMenu(source: false)
                 Spacer(minLength: 4)
                 HStack(spacing: 1) {
+                    if model.method == "截图 OCR" {
+                        tool("doc.on.clipboard", help: "复制提取的原文") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(model.source, forType: .string)
+                        }
+                    }
                     tool(model.pinned ? "pin.fill" : "pin", help: model.pinned ? "取消固定" : "固定浮窗",
                          active: model.pinned) { model.pinned.toggle() }
                     tool(model.copied ? "checkmark" : "doc.on.doc", help: model.copied ? "已复制" : "复制译文",
@@ -618,7 +626,7 @@ struct TranslationCard: View {
                 if model.phase == .loading || model.phase == .idle {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.mini)
-                        Text("正在本机翻译…").font(.system(size: 12)).foregroundStyle(MistCardPalette.secondary)
+                        Text("正在翻译…").font(.system(size: 12)).foregroundStyle(MistCardPalette.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ScrollView {
@@ -667,6 +675,31 @@ struct TranslationCard: View {
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 0.5))
             .preferredColorScheme(.light).foregroundStyle(MistCardPalette.ink)
             .onExitCommand { model.dismiss(force: true) }
+    }
+
+    private func languageMenu(source: Bool) -> some View {
+        let current = source ? model.sourceLanguage : model.target
+        return Menu {
+            ForEach(TextLogic.languages, id: \.id) { language in
+                Button {
+                    if source {
+                        model.sourceLanguage = language.id
+                        let target = TextLogic.sameLanguage(language.id, model.target)
+                            ? TextLogic.target(for: language.id, preferred: model.targetLanguage, native: model.nativeLanguage)
+                            : model.target
+                        model.translate(to: target)
+                    } else {
+                        model.translate(to: language.id)
+                    }
+                } label: {
+                    if current == language.id { Label(TextLogic.displayName(language.id), systemImage: "checkmark") }
+                    else { Text(TextLogic.displayName(language.id)) }
+                }
+            }
+        } label: {
+            Text(TextLogic.displayName(current)).font(.system(size: 11)).lineLimit(1)
+        }.menuStyle(.borderlessButton).fixedSize().disabled(model.isReplacing)
+            .accessibilityLabel(source ? "原文语言" : "译文语言")
     }
 
     private func tool(_ symbol: String, help: String, active: Bool = false, action: @escaping () -> Void) -> some View {

@@ -17,3 +17,6 @@ if [[ "$check_status" != 1 ]] || ! /usr/bin/grep -q 'CHECK FAILED:.*Deliberate d
   exit 1
 fi
 print 'Diagnostic failure exits normally with status 1 and an explicit error.'
+
+swiftc Sources/HoverTranslate/SelectionEditor.swift Tests/HoverTranslateTests/SelectionMenuChecks.swift -o "$build_dir/checks/SelectionMenuChecks"
+"$build_dir/checks/SelectionMenuChecks"

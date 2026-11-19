@@ -6,10 +6,16 @@
     <key>CFBundleDisplayName</key><string>浮译</string>
     <key>CFBundleExecutable</key><string>HoverTranslate</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.4.0</string>
-    <key>CFBundleVersion</key><string>16</string>
+    <key>CFBundleShortVersionString</key><string>0.5.5</string>
+    <key>CFBundleVersion</key><string>22</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>NSHumanReadableCopyright</key><string>MIT License</string>
+    <key>NSServices</key><array><dict>
+        <key>NSMenuItem</key><dict><key>default</key><string>浮译</string></dict>
+        <key>NSMessage</key><string>translateSelection</string>
+        <key>NSPortName</key><string>浮译</string>
+        <key>NSSendTypes</key><array><string>public.utf8-plain-text</string><string>NSStringPboardType</string></array>
+    </dict></array>
 </dict></plist>
