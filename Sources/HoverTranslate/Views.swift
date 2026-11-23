@@ -3,15 +3,15 @@ import AppKit
 import Translation
 
 enum Palette {
-    static let paper = Color(red: 0.969, green: 0.969, blue: 0.957)
-    static let sidebar = Color(red: 0.937, green: 0.941, blue: 0.925)
+    static let paper = Color(red: 0.980, green: 0.980, blue: 0.984)
+    static let sidebar = Color(red: 0.953, green: 0.955, blue: 0.962)
     static let surface = Color.white
-    static let ink = Color(red: 0.12, green: 0.16, blue: 0.14)
-    static let secondary = Color(red: 0.45, green: 0.48, blue: 0.46)
-    static let green = Color(red: 0.18, green: 0.37, blue: 0.29)
-    static let lime = Color(red: 0.86, green: 0.93, blue: 0.86)
-    static let mint = Color(red: 0.93, green: 0.96, blue: 0.93)
-    static let line = Color(red: 0.89, green: 0.90, blue: 0.88)
+    static let ink = Color(red: 0.110, green: 0.114, blue: 0.125)
+    static let secondary = Color(red: 0.455, green: 0.467, blue: 0.494)
+    static let accent = Color(red: 0.165, green: 0.173, blue: 0.192)
+    static let softTint = Color(red: 0.941, green: 0.945, blue: 0.957)
+    static let line = Color(red: 0.898, green: 0.906, blue: 0.922)
+    static let activeDot = Color(red: 0.22, green: 0.72, blue: 0.45)
 }
 
 /// Signature capsule button shared across the entire window & tool views.
@@ -24,11 +24,11 @@ struct CapsuleButton: ButtonStyle {
             .padding(.horizontal, compact ? 12 : 15)
             .padding(.vertical, compact ? 6 : 8)
             .foregroundStyle(prominent ? Color.white : Palette.ink)
-            .background(prominent ? Palette.green : Palette.surface)
+            .background(prominent ? Palette.accent : Palette.surface)
             .clipShape(Capsule())
             .overlay(Capsule().stroke(prominent ? Color.clear : Palette.line, lineWidth: 1))
-            .shadow(color: prominent ? Palette.green.opacity(0.20) : .black.opacity(0.035),
-                    radius: prominent ? 6 : 2.5, y: 1.5)
+            .shadow(color: prominent ? Color.black.opacity(0.14) : .black.opacity(0.03),
+                    radius: prominent ? 5 : 2.5, y: 1.5)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.82 : 1)
     }
@@ -46,10 +46,11 @@ struct CapsulePill: View {
             }
             Text(text).font(.system(size: 10.5, weight: .medium, design: .rounded))
         }
-        .foregroundStyle(accent ? Palette.green : Palette.secondary)
+        .foregroundStyle(accent ? Palette.ink : Palette.secondary)
         .padding(.horizontal, 9).padding(.vertical, 3.5)
-        .background(accent ? Palette.mint : Palette.sidebar)
+        .background(accent ? Palette.softTint : Palette.sidebar)
         .clipShape(Capsule())
+        .overlay(Capsule().stroke(accent ? Palette.line.opacity(0.9) : Color.clear, lineWidth: 0.5))
     }
 }
 
@@ -63,7 +64,7 @@ struct Panel<Content: View>: View {
             .background(Palette.surface)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Palette.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.035), radius: 10, y: 3)
+            .shadow(color: .black.opacity(0.03), radius: 10, y: 3)
     }
 }
 
@@ -73,9 +74,9 @@ struct IconTile: View {
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: size * 0.44, weight: .medium))
-            .foregroundStyle(Palette.green)
+            .foregroundStyle(Palette.accent)
             .frame(width: size, height: size)
-            .background(Palette.mint)
+            .background(Palette.softTint)
             .clipShape(Circle())
     }
 }
@@ -97,7 +98,7 @@ struct MainView: View {
                         .frame(maxWidth: 860, alignment: .leading)
                 }.scrollIndicators(.hidden)
                 HStack(spacing: 8) {
-                    Circle().fill(model.enabled ? Palette.green : Palette.secondary.opacity(0.55)).frame(width: 6, height: 6)
+                    Circle().fill(model.enabled ? Palette.activeDot : Palette.secondary.opacity(0.45)).frame(width: 6, height: 6)
                     Text(model.status).font(.system(size: 11)).lineLimit(1)
                     Spacer()
                     CapsulePill(text: "⌃⌥T 翻译选区", accent: false)
@@ -139,7 +140,7 @@ struct MainView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.3"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.4"
     }
 
     private var sidebar: some View {
@@ -147,10 +148,10 @@ struct MainView: View {
             HStack(spacing: 11) {
                 Text("译").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 38, height: 38)
-                    .background(LinearGradient(colors: [Color(red: 0.26, green: 0.47, blue: 0.37), Palette.green],
+                    .background(LinearGradient(colors: [Color(red: 0.24, green: 0.25, blue: 0.28), Palette.accent],
                                                startPoint: .topLeading, endPoint: .bottomTrailing))
                     .clipShape(Circle())
-                    .shadow(color: Palette.green.opacity(0.25), radius: 6, y: 2)
+                    .shadow(color: Color.black.opacity(0.14), radius: 5, y: 2)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("浮译").font(.system(size: 19, weight: .semibold))
                     Text("Hover Translate").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.secondary)
@@ -174,7 +175,7 @@ struct MainView: View {
                 Text("全局翻译").font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Toggle("全局翻译", isOn: Binding(get: { model.enabled }, set: { _ in model.toggleEnabled() }))
-                    .toggleStyle(.switch).labelsHidden().tint(Palette.green).controlSize(.mini)
+                    .toggleStyle(.switch).labelsHidden().tint(Palette.accent).controlSize(.mini)
             }
             Text(model.enabled ? "悬停外语、划词圆球已启用" : "已暂停，不会读取屏幕文字")
                 .font(.system(size: 10)).foregroundStyle(Palette.secondary).lineSpacing(2)
@@ -193,20 +194,20 @@ struct MainView: View {
         return Button { model.page = id } label: {
             HStack(spacing: 10) {
                 Image(systemName: symbol).font(.system(size: 12.5, weight: .medium)).frame(width: 18)
-                    .foregroundStyle(active ? Palette.green : Palette.secondary)
+                    .foregroundStyle(active ? Palette.ink : Palette.secondary)
                 Text(title).font(.system(size: 13, weight: active ? .semibold : .regular))
                 Spacer()
                 if let badge {
                     Text(badge).font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(active ? Palette.green : Palette.secondary)
+                        .foregroundStyle(active ? Palette.ink : Palette.secondary)
                         .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(active ? Palette.mint : Palette.paper)
+                        .background(active ? Palette.softTint : Palette.paper)
                         .clipShape(Capsule())
                 }
             }.padding(.horizontal, 12).padding(.vertical, 8.5)
                 .background(active ? Palette.surface : Color.clear)
                 .clipShape(Capsule())
-                .shadow(color: .black.opacity(active ? 0.055 : 0), radius: 4, y: 1.5)
+                .shadow(color: .black.opacity(active ? 0.05 : 0), radius: 4, y: 1.5)
                 .contentShape(Capsule())
         }.buttonStyle(.plain).padding(.bottom, 4)
     }
@@ -283,8 +284,8 @@ struct HomeView: View {
     private var browserPreview: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                ForEach([Color(red: 1.0, green: 0.37, blue: 0.34), Color(red: 1.0, green: 0.74, blue: 0.18), Color(red: 0.16, green: 0.79, blue: 0.25)], id: \.self) { color in
-                    Circle().fill(color.opacity(0.85)).frame(width: 9, height: 9)
+                ForEach(0..<3, id: \.self) { _ in
+                    Circle().fill(Color.black.opacity(0.10)).frame(width: 8.5, height: 8.5)
                 }
                 Spacer()
                 CapsulePill(text: "交互预览", accent: false)
@@ -300,17 +301,17 @@ struct HomeView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "cursorarrow.rays").font(.system(size: 10))
                     Text("悬停在句子上体验胶囊译文，或拖选文字体验快捷圆球").font(.system(size: 10.5, weight: .medium))
-                }.foregroundStyle(Palette.green).padding(.top, 2)
+                }.foregroundStyle(Palette.secondary).padding(.top, 2)
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }.background(Palette.surface).clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Palette.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.04), radius: 12, y: 4)
+            .shadow(color: .black.opacity(0.035), radius: 12, y: 4)
     }
 
     private func step(_ n: String, _ title: String, _ text: String) -> some View {
         HStack(alignment: .top, spacing: 11) {
-            Text(n).font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Palette.green)
-                .frame(width: 22, height: 22).background(Palette.mint).clipShape(Circle())
+            Text(n).font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                .frame(width: 22, height: 22).background(Palette.softTint).clipShape(Circle())
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.system(size: 13, weight: .semibold))
                 Text(text).font(.system(size: 11)).foregroundStyle(Palette.secondary).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
@@ -434,7 +435,7 @@ struct HoverSubtitle: View {
             if isToast {
                 Image(systemName: model.toastMessage.contains("已") ? "checkmark.circle.fill" : "info.circle")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(model.toastMessage.contains("已") ? Palette.green : Color.secondary)
+                    .foregroundStyle(model.toastMessage.contains("已") ? Palette.accent : Color.secondary)
             } else if model.phase == .failure {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 11, weight: .medium))
@@ -716,7 +717,7 @@ struct SettingsView: View {
 
     private func toggleRow(_ icon: String, _ title: String, _ subtitle: String, _ value: Binding<Bool>) -> some View {
         row(icon, title, subtitle) {
-            Toggle(title, isOn: value).toggleStyle(.switch).labelsHidden().tint(Palette.green).controlSize(.small)
+            Toggle(title, isOn: value).toggleStyle(.switch).labelsHidden().tint(Palette.accent).controlSize(.small)
         }
     }
 
@@ -726,7 +727,7 @@ struct SettingsView: View {
 
     private func slider(_ value: Binding<Double>, _ range: ClosedRange<Double>, _ step: Double, _ label: String) -> some View {
         HStack(spacing: 10) {
-            Slider(value: value, in: range, step: step).tint(Palette.green).frame(width: 170)
+            Slider(value: value, in: range, step: step).tint(Palette.accent).frame(width: 170)
             Text(label).font(.system(size: 11, design: .rounded)).foregroundStyle(Palette.secondary).frame(width: 52, alignment: .trailing)
         }
     }
@@ -760,10 +761,10 @@ struct DropdownMenu: View {
 }
 
 enum MistCardPalette {
-    static let ink = Color(red: 0.13, green: 0.16, blue: 0.14)
-    static let secondary = Color(red: 0.47, green: 0.51, blue: 0.48)
-    static let accent = Color(red: 0.20, green: 0.40, blue: 0.31)
-    static let selected = Color(red: 0.90, green: 0.95, blue: 0.91)
+    static let ink = Color(red: 0.110, green: 0.114, blue: 0.125)
+    static let secondary = Color(red: 0.455, green: 0.467, blue: 0.494)
+    static let accent = Color(red: 0.165, green: 0.173, blue: 0.192)
+    static let selected = Color(red: 0.937, green: 0.941, blue: 0.953)
 }
 
 struct TranslationCard: View {

@@ -90,19 +90,15 @@ struct SelectionToolbarView: View {
                 Circle()
                     .fill(.regularMaterial)
                 Circle()
-                    .fill(isHovered ? Palette.green : Color.white.opacity(0.76))
+                    .fill(isHovered ? Palette.accent : Color.white.opacity(0.84))
                 Circle()
-                    .stroke(isHovered ? Palette.green : Color.black.opacity(0.08), lineWidth: 0.75)
+                    .stroke(isHovered ? Palette.accent : Color.black.opacity(0.08), lineWidth: 0.75)
                 icon()
-                    .foregroundStyle(
-                        isHovered
-                            ? Color.white
-                            : (accentRest ? Palette.green : MistCardPalette.ink)
-                    )
+                    .foregroundStyle(isHovered ? Color.white : Palette.ink)
             }
             .frame(width: 28, height: 28)
             .shadow(
-                color: isHovered ? Palette.green.opacity(0.28) : Color.black.opacity(0.12),
+                color: Color.black.opacity(isHovered ? 0.20 : 0.11),
                 radius: isHovered ? 7 : 4.5,
                 x: 0,
                 y: isHovered ? 3 : 2
@@ -116,9 +112,9 @@ struct SelectionToolbarView: View {
                         .fixedSize()
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2.5)
-                        .background(Palette.green)
+                        .background(Palette.accent)
                         .clipShape(Capsule())
-                        .shadow(color: Palette.green.opacity(0.24), radius: 4, y: 1.5)
+                        .shadow(color: Color.black.opacity(0.16), radius: 4, y: 1.5)
                         .offset(y: -23)
                         .allowsHitTesting(false)
                         .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .bottom)))
@@ -270,9 +266,9 @@ struct SnippetsView: View {
                 } label: {
                     Image(systemName: ui.copiedID == item.id ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11))
-                        .foregroundStyle(ui.copiedID == item.id ? Palette.green : Palette.secondary)
+                        .foregroundStyle(ui.copiedID == item.id ? Palette.ink : Palette.secondary)
                         .frame(width: 26, height: 26)
-                        .background(ui.copiedID == item.id ? Palette.mint : Palette.paper)
+                        .background(ui.copiedID == item.id ? Palette.softTint : Palette.paper)
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -303,7 +299,7 @@ struct SnippetsView: View {
                 Rectangle().fill(Palette.line).frame(height: 1).padding(.vertical, 10)
                 Text(translation)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Palette.green)
+                    .foregroundStyle(Palette.secondary)
                     .lineSpacing(4)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

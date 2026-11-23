@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.4
+
+- Refine the capsule & circular UI palette into a light, airy monochrome neutral theme (crisp white, pale mist gray, delicate hairlines, and matte charcoal accents) across the main window, Snippets, Settings, Try view, floating translation card, hover capsule, and staggered selection orbs.
+
 ## 0.6.3
 
 - Restore the warm-paper & forest-green capsule aesthetic across the entire app: frosted-glass `Capsule()` hover subtitle, warm frosted translation card with circular tools and capsule language/action buttons, capsule navigation & controls in the main window and Snippets view, and frosted-glass + forest-green staggered circular selection orbs (`译` / `复制` / `保存`) with capsule hover labels.
