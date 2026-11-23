@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1
+
+- Fix selection toolbar not appearing on multi-window / cross-window selections by tracking the exact `CGWindowID` under the pointer instead of comparing frontmost app window frames, relaxing false AX PID/role rejections, adding a trackpad/mouse-state drag fallback, and supporting local text selection inside Hover Translate itself.
+- Redesign the entire main window and all floating UI surfaces (translation card, selection toolbar, hover subtitle/toast) in the `coss.com/ui` aesthetic with crisp monochrome neutral tokens, semi-transparent borders, `CardFrame` layering, `<kbd>` shortcut caps, and native Light/Dark mode support.
+
 ## 0.6.0
 
 - Add a floating selection mini-toolbar (`翻译` / `复制` / `保存`) beside selected text, replacing the hidden macOS Services right-click menu.

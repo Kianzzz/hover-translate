@@ -39,8 +39,12 @@ final class HoverMonitor {
     private var lastPermissionRefresh = Date.distantPast
     private var previousCaptureAccess = ""
     private var mouseDownPoint: CGPoint?
-    private var mouseDownWindowFrame: CGRect?
+    private var mouseDownWindow: (id: CGWindowID, frame: CGRect)?
     private var enabledSubscription: AnyCancellable?
+    private var wasPrimaryButtonDown = false
+    private var pollPressStart: CGPoint?
+    private var pollPressWindow: (id: CGWindowID, frame: CGRect)?
+    private var lastGlobalMouseUpAt = Date.distantPast
 
     init(model: AppModel) { self.model = model }
 
@@ -85,11 +89,8 @@ final class HoverMonitor {
                 }
                 if type == .leftMouseDown {
                     self.mouseDownPoint = location
-                    if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-                        self.mouseDownWindowFrame = self.frontmostWindowFrame(pid: pid)
-                    } else {
-                        self.mouseDownWindowFrame = nil
-                    }
+                    let quartz = TextLogic.quartzPoint(location, desktopTop: self.desktopTop)
+                    self.mouseDownWindow = self.windowAt(quartz: quartz)
                     self.clearToolbar()
                     self.selectionTask?.cancel()
                     if self.model.isPresenting || self.candidate != nil {
@@ -98,41 +99,46 @@ final class HoverMonitor {
                     self.resetMotion(at: location)
                     return
                 }
-                let selected = type == .leftMouseUp && TextLogic.isSelectionGesture(
-                    from: self.mouseDownPoint, to: location, clickCount: clickCount, extending: extending)
-                let windowMoved: Bool
-                if type == .leftMouseUp, let before = self.mouseDownWindowFrame,
-                   let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                   let after = self.frontmostWindowFrame(pid: pid) {
-                    windowMoved = abs(before.minX - after.minX) > 2 || abs(before.minY - after.minY) > 2
-                        || abs(before.width - after.width) > 2 || abs(before.height - after.height) > 2
-                } else {
-                    windowMoved = false
-                }
                 if type == .leftMouseUp {
+                    self.lastGlobalMouseUpAt = Date()
+                    let downPoint = self.mouseDownPoint ?? self.pollPressStart
+                    let downWindow = self.mouseDownWindow ?? self.pollPressWindow
                     self.mouseDownPoint = nil
-                    self.mouseDownWindowFrame = nil
-                }
-                self.selectionTask?.cancel()
-                if selected && !windowMoved && self.model.enabled && self.model.selectionToolbarEnabled
-                    && !self.model.capturingRegion && !self.model.pinned {
+                    self.mouseDownWindow = nil
+                    self.pollPressStart = nil
+                    self.pollPressWindow = nil
+                    let selected = TextLogic.isSelectionGesture(
+                        from: downPoint, to: location, clickCount: clickCount, extending: extending)
+                    let windowMoved = self.didWindowMove(downWindow)
+                    self.selectionTask?.cancel()
+                    if selected && !windowMoved && self.model.enabled && self.model.selectionToolbarEnabled
+                        && !self.model.capturingRegion && !self.model.pinned {
+                        if self.model.isPresenting || self.candidate != nil {
+                            self.model.dismiss()
+                        }
+                        self.resetMotion(at: location)
+                        self.attempted = true
+                        self.scheduleSelectionToolbar(at: location)
+                        return
+                    }
+                    self.clearToolbar()
                     if self.model.isPresenting || self.candidate != nil {
                         self.model.dismiss()
                     }
                     self.resetMotion(at: location)
-                    self.attempted = true
-                    self.scheduleSelectionToolbar(at: location)
+                    self.attempted = selected
                     return
                 }
+                self.selectionTask?.cancel()
                 self.clearToolbar()
                 if self.model.isPresenting || self.candidate != nil {
                     self.model.dismiss()
                 }
                 self.resetMotion(at: location)
-                self.attempted = selected || type == .rightMouseDown
+                self.attempted = type == .rightMouseDown
             }
         }
-        localEvents = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown]) { [weak self] event in
+        localEvents = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown, .leftMouseUp]) { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown && event.keyCode == 53 {
                 if self.toolbarState != nil {
@@ -145,7 +151,29 @@ final class HoverMonitor {
                 }
                 return event
             }
-            if event.type == .scrollWheel || event.type == .leftMouseDown {
+            if event.type == .leftMouseDown {
+                if self.model.pointerInToolbar?() == true { return event }
+                self.mouseDownPoint = NSEvent.mouseLocation
+                if self.toolbarState != nil { self.clearToolbar() }
+                if (self.model.isPresenting || self.candidate != nil) && self.model.pointerInCard?() != true {
+                    self.model.dismiss()
+                }
+                return event
+            }
+            if event.type == .leftMouseUp {
+                let loc = NSEvent.mouseLocation
+                let down = self.mouseDownPoint
+                self.mouseDownPoint = nil
+                if self.model.pointerInToolbar?() != true && self.model.pointerInCard?() != true,
+                   self.model.selectionToolbarEnabled && !self.model.pinned && !self.model.capturingRegion,
+                   TextLogic.isSelectionGesture(from: down, to: loc, clickCount: event.clickCount, extending: event.modifierFlags.contains(.shift)) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+                        self?.showLocalSelectionToolbarIfSelected(at: loc)
+                    }
+                }
+                return event
+            }
+            if event.type == .scrollWheel {
                 if self.toolbarState != nil && self.model.pointerInToolbar?() != true {
                     self.clearToolbar()
                 }
@@ -155,6 +183,29 @@ final class HoverMonitor {
             }
             return event
         }
+    }
+
+    private func showLocalSelectionToolbarIfSelected(at pointer: CGPoint) {
+        guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+        let range = tv.selectedRange()
+        guard range.length > 0, range.location != NSNotFound else { return }
+        let raw = (tv.string as NSString).substring(with: range)
+        let cleaned = TextLogic.clean(raw)
+        guard !cleaned.isEmpty else { return }
+        let capture = SelectedCapture(
+            text: CapturedText(text: cleaned, bounds: .zero, method: "选中文字"),
+            replacement: nil
+        )
+        toolbarState = SelectionToolbarState(
+            pid: ProcessInfo.processInfo.processIdentifier,
+            appName: "浮译",
+            anchor: CGRect(origin: pointer, size: CGSize(width: 1, height: 1)),
+            pointer: pointer,
+            preloaded: capture,
+            createdAt: Date()
+        )
+        startPolling()
+        model.showSelectionToolbar?(CGRect(origin: pointer, size: CGSize(width: 1, height: 1)))
     }
 
     /// The 25 Hz pointer poll is needed only while translation is on or a
@@ -196,7 +247,7 @@ final class HoverMonitor {
     private func scheduleSelectionToolbar(at pointer: CGPoint) {
         toolbarTask?.cancel()
         toolbarTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 65_000_000)
             guard let self, !Task.isCancelled else { return }
             guard NSEvent.pressedMouseButtons == 0,
                   self.model.enabled, self.model.selectionToolbarEnabled,
@@ -211,7 +262,7 @@ final class HoverMonitor {
             var preloaded: SelectedCapture?
             if self.model.accessibility {
                 do {
-                    preloaded = try await TextCapture.selected(pid: pid, fallbackPoint: quartz)
+                    preloaded = try await TextCapture.selected(pid: pid, fallbackPoint: quartz, timeout: 0.12)
                 } catch CaptureError.protectedText {
                     return
                 } catch {
@@ -358,6 +409,29 @@ final class HoverMonitor {
             resetMotion(at: NSEvent.mouseLocation)
         }
         let point = NSEvent.mouseLocation
+        // Backup drag detector in case macOS suppresses a global leftMouseDown/Up (e.g., certain trackpad gestures).
+        let primaryDown = (NSEvent.pressedMouseButtons & 1) != 0
+        if primaryDown && !wasPrimaryButtonDown {
+            wasPrimaryButtonDown = true
+            pollPressStart = point
+            pollPressWindow = windowAt(quartz: TextLogic.quartzPoint(point, desktopTop: desktopTop))
+        } else if !primaryDown && wasPrimaryButtonDown {
+            wasPrimaryButtonDown = false
+            let start = pollPressStart
+            let win = pollPressWindow
+            pollPressStart = nil
+            pollPressWindow = nil
+            if now.timeIntervalSince(lastGlobalMouseUpAt) > 0.12,
+               let start, hypot(point.x - start.x, point.y - start.y) >= 8,
+               !didWindowMove(win),
+               model.enabled, model.selectionToolbarEnabled, !model.capturingRegion, !model.pinned,
+               NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                resetMotion(at: point)
+                attempted = true
+                scheduleSelectionToolbar(at: point)
+                return
+            }
+        }
         // A deliberate selection is an action toolbar, not a hover preview.
         // Keep it reachable across any gap until an outside click/scroll or close.
         if model.capturingRegion { return }
@@ -416,17 +490,32 @@ final class HoverMonitor {
         model.selectionVisible && visibleCardFrame?() != nil
     }
 
-    private func frontmostWindowFrame(pid: pid_t) -> CGRect? {
+    private func windowAt(quartz: CGPoint) -> (id: CGWindowID, frame: CGRect)? {
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let ownPid = ProcessInfo.processInfo.processIdentifier
         for window in windows {
-            guard window[kCGWindowOwnerPID as String] as? pid_t == pid,
-                  (window[kCGWindowLayer as String] as? Int ?? 0) == 0,
+            guard (window[kCGWindowLayer as String] as? Int ?? 0) == 0,
+                  (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  window[kCGWindowOwnerPID as String] as? pid_t != ownPid,
+                  let id = window[kCGWindowNumber as String] as? CGWindowID,
                   let raw = window[kCGWindowBounds as String] as? [String: Any],
                   let rect = CGRect(dictionaryRepresentation: raw as CFDictionary),
-                  rect.width > 50, rect.height > 50 else { continue }
-            return rect
+                  rect.width > 50, rect.height > 50,
+                  rect.contains(quartz) else { continue }
+            return (id, rect)
         }
         return nil
+    }
+
+    private func didWindowMove(_ initial: (id: CGWindowID, frame: CGRect)?) -> Bool {
+        guard let initial,
+              let windows = CGWindowListCopyWindowInfo([.optionIncludingWindow], initial.id) as? [[String: Any]],
+              let raw = windows.first?[kCGWindowBounds as String] as? [String: Any],
+              let after = CGRect(dictionaryRepresentation: raw as CFDictionary) else { return false }
+        return abs(initial.frame.minX - after.minX) > 2
+            || abs(initial.frame.minY - after.minY) > 2
+            || abs(initial.frame.width - after.width) > 2
+            || abs(initial.frame.height - after.height) > 2
     }
 
     private func topWindowIsOurs(at quartz: CGPoint) -> Bool {

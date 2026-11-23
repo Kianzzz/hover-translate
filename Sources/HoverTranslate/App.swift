@@ -188,7 +188,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         glass.material = .popover
         glass.blendingMode = .behindWindow
         glass.state = .active
-        glass.appearance = NSAppearance(named: .aqua)
         glass.wantsLayer = true
         glass.layer?.cornerRadius = 14
         glass.layer?.masksToBounds = true
@@ -216,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func createSelectionToolbar() {
-        let size = CGSize(width: 204, height: 34)
+        let size = CGSize(width: 212, height: 36)
         selectionToolbar = SelectionToolbarPanel(
             contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
@@ -237,9 +236,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         glass.material = .popover
         glass.blendingMode = .behindWindow
         glass.state = .active
-        glass.appearance = NSAppearance(named: .aqua)
         glass.wantsLayer = true
-        glass.layer?.cornerRadius = 10
+        glass.layer?.cornerRadius = 11
         glass.layer?.masksToBounds = true
         let hosting = FirstMouseHostingView(rootView: SelectionToolbarView(model: model))
         hosting.sizingOptions = []
@@ -250,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showSelectionToolbar(_ anchor: CGRect) {
-        let size = CGSize(width: 204, height: 34)
+        let size = CGSize(width: 212, height: 36)
         guard let screen = screen(containing: anchor.origin) else { return }
         let safe = screen.visibleFrame.insetBy(dx: 10, dy: 10)
         let x = min(max(anchor.midX - size.width / 2, safe.minX), safe.maxX - size.width)
@@ -263,9 +261,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func showToast(_ message: String, at point: CGPoint) {
         guard let screen = screen(containing: point) else { return }
-        let width = min(screen.visibleFrame.width - 24, max(96, min(420, ceil((message as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + 46)))
+        let width = min(screen.visibleFrame.width - 24, max(96, min(420, ceil((message as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + 48)))
         let anchor = CGRect(origin: point, size: CGSize(width: 1, height: 1))
-        let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: width, height: 28), visible: screen.visibleFrame)
+        let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: width, height: 30), visible: screen.visibleFrame)
         subtitle.setFrame(frame, display: true)
         subtitle.orderFrontRegardless()
     }
@@ -297,9 +295,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             panel.orderOut(nil)
             panelDraggedByUser = false
             guard let screen = screen(containing: anchor.origin) else { return }
-            let extra: CGFloat = model.phase == .failure ? 44 : 28
+            let extra: CGFloat = model.phase == .failure ? 46 : 30
             let width = min(screen.visibleFrame.width - 24, max(96, min(680, ceil((model.subtitleText as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + extra)))
-            let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: width, height: 26), visible: screen.visibleFrame)
+            let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: width, height: 28), visible: screen.visibleFrame)
             subtitle.setFrame(frame, display: true)
             subtitle.orderFrontRegardless()
             return

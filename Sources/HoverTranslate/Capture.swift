@@ -109,17 +109,17 @@ enum TextCapture {
         return CGRect(origin: p, size: s)
     }
 
-    static func selected(pid: pid_t, fallbackPoint: CGPoint) async throws -> SelectedCapture {
+    static func selected(pid: pid_t, fallbackPoint: CGPoint, timeout: Float = 0.25) async throws -> SelectedCapture {
         guard pid != ProcessInfo.processInfo.processIdentifier else { throw CaptureError.ownApplication }
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 let app = AXUIElementCreateApplication(pid)
-                AXUIElementSetMessagingTimeout(app, 0.3)
+                AXUIElementSetMessagingTimeout(app, timeout)
                 guard let ref = attribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(ref) == AXUIElementGetTypeID() else {
                     continuation.resume(throwing: CaptureError.nothingSelected); return
                 }
                 let focused = ref as! AXUIElement
-                AXUIElementSetMessagingTimeout(focused, 0.3)
+                AXUIElementSetMessagingTimeout(focused, timeout)
                 if isProtected(focused) { continuation.resume(throwing: CaptureError.protectedText); return }
                 guard let raw = readSelectedText(from: focused),
                       !TextLogic.clean(raw).isEmpty else {
@@ -180,13 +180,19 @@ enum TextCapture {
     static func selectionContext(at quartzPoint: CGPoint, pid: pid_t) -> (allowed: Bool, protected: Bool) {
         guard pid != ProcessInfo.processInfo.processIdentifier else { return (false, false) }
         guard let hit = elementAt(quartzPoint) else { return (true, false) }
-        if (try? requireExternalElement(hit)) == nil { return (false, false) }
+        var hitPid: pid_t = 0
+        if AXUIElementGetPid(hit, &hitPid) == .success {
+            if hitPid == ProcessInfo.processInfo.processIdentifier { return (false, false) }
+            if hitPid <= 0 { return (true, false) }
+        } else {
+            return (true, false)
+        }
         if isProtected(hit) { return (false, true) }
         let role = attribute(hit, kAXRoleAttribute) as? String ?? ""
         let ignoredRoles: Set<String> = [
             "AXScrollBar", "AXValueIndicator", "AXSlider", "AXSplitter", "AXGrowArea",
-            "AXToolbar", "AXToolbarButton", "AXCloseButton", "AXZoomButton", "AXMinimizeButton",
-            "AXFullScreenButton", "AXMenuBar", "AXMenuBarItem", "AXDockItem", "AXTabGroup"
+            "AXCloseButton", "AXZoomButton", "AXMinimizeButton", "AXFullScreenButton",
+            "AXMenuBar", "AXMenuBarItem", "AXDockItem"
         ]
         if ignoredRoles.contains(role) { return (false, false) }
         return (true, false)
