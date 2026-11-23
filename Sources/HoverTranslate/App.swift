@@ -16,16 +16,27 @@ final class SubtitlePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+final class SelectionToolbarPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model = AppModel()
     var window: NSWindow!
     var panel: FloatingPanel!
     var subtitle: SubtitlePanel!
+    var selectionToolbar: SelectionToolbarPanel!
     var statusItem: NSStatusItem!
     var monitor: HoverMonitor!
     var subscriptions = Set<AnyCancellable>()
-    var hotKey: EventHotKeyRef?
+    var hotKeySelection: EventHotKeyRef?
+    var hotKeyScreenshot: EventHotKeyRef?
     var hotKeyHandler: EventHandlerRef?
     private var panelDraggedByUser = false
     private var settingPanelFrame = false
@@ -34,20 +45,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         createPanel()
         createSubtitle()
+        createSelectionToolbar()
         createStatusItem()
         monitor = HoverMonitor(model: model)
         monitor.visibleCardFrame = { [weak self] in
             guard let panel = self?.panel, panel.isVisible else { return nil }
             return panel.frame
         }
-        NSApp.servicesProvider = self
-        NSUpdateDynamicServices()
+        monitor.visibleToolbarFrame = { [weak self] in
+            guard let bar = self?.selectionToolbar, bar.isVisible else { return nil }
+            return bar.frame
+        }
         monitor.start()
         model.showCard = { [weak self] anchor in self?.showCard(anchor) }
-        model.hideCard = { [weak self] in self?.panel.orderOut(nil); self?.subtitle.orderOut(nil) }
+        model.hideCard = { [weak self] in
+            self?.panel.orderOut(nil)
+            if self?.model.toastMessage.isEmpty == true { self?.subtitle.orderOut(nil) }
+        }
+        model.showToast = { [weak self] message, point in self?.showToast(message, at: point) }
+        model.hideToast = { [weak self] in
+            guard let self, !self.model.isPresenting || self.model.selectionVisible else { return }
+            self.subtitle.orderOut(nil)
+        }
+        model.showSelectionToolbar = { [weak self] anchor in self?.showSelectionToolbar(anchor) }
+        model.hideSelectionToolbar = { [weak self] in self?.selectionToolbar.orderOut(nil) }
+        model.toolbarActionTranslate = { [weak self] in self?.monitor.performToolbarAction(.translate) }
+        model.toolbarActionCopy = { [weak self] in self?.monitor.performToolbarAction(.copy) }
+        model.toolbarActionSave = { [weak self] in self?.monitor.performToolbarAction(.save) }
         model.startScreenshot = { [weak self] in self?.screenshot() }
         model.showWindow = { [weak self] in self?.showMain() }
         model.pointerInCard = { [weak self] in self?.panel.isVisible == true && self?.panel.frame.contains(NSEvent.mouseLocation) == true }
+        model.pointerInToolbar = { [weak self] in self?.selectionToolbar.isVisible == true && self?.selectionToolbar.frame.contains(NSEvent.mouseLocation) == true }
         model.stageHover = { [weak self] capture, rect, point, demo in self?.monitor.stage(capture, sourceRect: rect, pointer: point, demo: demo) }
         model.clearHover = { [weak self] in self?.monitor.clearCandidate() }
         model.releasePanelFocus = { [weak self] in self?.panel.resignKey() }
@@ -58,6 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.main.async { self?.resizeCard() }
         }.store(in: &subscriptions)
         model.$result.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.resizeCard() }
+        }.store(in: &subscriptions)
+        model.$source.dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async { self?.resizeCard() }
         }.store(in: &subscriptions)
         model.$enabled.sink { [weak self] enabled in
@@ -184,6 +215,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         subtitle.contentView = fixedHostingView(HoverSubtitle(model: model), size: subtitle.frame.size)
     }
 
+    func createSelectionToolbar() {
+        let size = CGSize(width: 204, height: 34)
+        selectionToolbar = SelectionToolbarPanel(
+            contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        selectionToolbar.title = "浮译 · 划词工具栏"
+        selectionToolbar.setAccessibilityRole(.window)
+        selectionToolbar.setAccessibilityLabel("划词工具栏")
+        selectionToolbar.isOpaque = false
+        selectionToolbar.backgroundColor = .clear
+        selectionToolbar.hasShadow = true
+        selectionToolbar.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)
+        selectionToolbar.hidesOnDeactivate = false
+        selectionToolbar.isReleasedWhenClosed = false
+        selectionToolbar.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        let glass = NSVisualEffectView(frame: CGRect(origin: .zero, size: size))
+        glass.material = .popover
+        glass.blendingMode = .behindWindow
+        glass.state = .active
+        glass.appearance = NSAppearance(named: .aqua)
+        glass.wantsLayer = true
+        glass.layer?.cornerRadius = 10
+        glass.layer?.masksToBounds = true
+        let hosting = FirstMouseHostingView(rootView: SelectionToolbarView(model: model))
+        hosting.sizingOptions = []
+        hosting.frame = glass.bounds
+        hosting.autoresizingMask = [.width, .height]
+        glass.addSubview(hosting)
+        selectionToolbar.contentView = glass
+    }
+
+    func showSelectionToolbar(_ anchor: CGRect) {
+        let size = CGSize(width: 204, height: 34)
+        guard let screen = screen(containing: anchor.origin) else { return }
+        let safe = screen.visibleFrame.insetBy(dx: 10, dy: 10)
+        let x = min(max(anchor.midX - size.width / 2, safe.minX), safe.maxX - size.width)
+        var y = anchor.maxY + 12
+        if y + size.height > safe.maxY { y = anchor.minY - size.height - 12 }
+        y = min(max(y, safe.minY), safe.maxY - size.height)
+        selectionToolbar.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        selectionToolbar.orderFrontRegardless()
+    }
+
+    func showToast(_ message: String, at point: CGPoint) {
+        guard let screen = screen(containing: point) else { return }
+        let width = min(screen.visibleFrame.width - 24, max(96, min(420, ceil((message as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + 46)))
+        let anchor = CGRect(origin: point, size: CGSize(width: 1, height: 1))
+        let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: width, height: 28), visible: screen.visibleFrame)
+        subtitle.setFrame(frame, display: true)
+        subtitle.orderFrontRegardless()
+    }
+
     // AppKit owns panel geometry; asynchronous SwiftUI measurement must not
     // resize the NSWindow as translation content changes.
     private func fixedHostingView<Content: View>(_ content: Content, size: CGSize) -> NSView {
@@ -260,10 +346,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.button?.toolTip = "浮译 · 已暂停"
         let menu = NSMenu()
         menu.addItem(item("打开浮译", #selector(openMain), ""))
+        menu.addItem(item("打开摘录本", #selector(openSnippets), ""))
         menu.addItem(.separator())
         menu.addItem(item("开启 / 暂停全局翻译", #selector(toggle), ""))
         menu.addItem(item("翻译选中文字  ⌃⌥T", #selector(selection), ""))
-        menu.addItem(item("截图翻译与提取文字…", #selector(screenshot), ""))
+        menu.addItem(item("截图翻译与提取文字  ⌥S", #selector(screenshot), ""))
         menu.addItem(item("翻译剪贴板", #selector(clipboard), ""))
         menu.addItem(item("偏好设置…", #selector(settings), ","))
         menu.addItem(.separator())
@@ -279,44 +366,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func registerShortcut() {
         var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let pointer = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, userData -> OSStatus in
-            guard let userData else { return OSStatus(eventNotHandledErr) }
+        InstallEventHandler(GetApplicationEventTarget(), { _, eventRef, userData -> OSStatus in
+            guard let userData, let eventRef else { return OSStatus(eventNotHandledErr) }
+            var hotKeyID = EventHotKeyID()
+            let err = GetEventParameter(
+                eventRef,
+                EventParamName(kEventParamDirectObject),
+                EventParamType(typeEventHotKeyID),
+                nil,
+                MemoryLayout<EventHotKeyID>.size,
+                nil,
+                &hotKeyID
+            )
+            guard err == noErr else { return OSStatus(eventNotHandledErr) }
             let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-            Task { @MainActor in delegate.monitor.readSelection() }
+            Task { @MainActor in
+                if hotKeyID.id == 1 { delegate.monitor.readSelection() }
+                else if hotKeyID.id == 2 { delegate.screenshot() }
+            }
             return noErr
         }, 1, &event, pointer, &hotKeyHandler)
-        let id = EventHotKeyID(signature: OSType(0x46555949), id: 1)
-        let result = RegisterEventHotKey(UInt32(kVK_ANSI_T), UInt32(controlKey | optionKey), id, GetApplicationEventTarget(), 0, &hotKey)
-        if result != noErr { model.status = "⌃⌥T 快捷键被占用；仍可使用鼠标选区和菜单栏。" }
+
+        let selID = EventHotKeyID(signature: OSType(0x46555949), id: 1)
+        let selResult = RegisterEventHotKey(UInt32(kVK_ANSI_T), UInt32(controlKey | optionKey), selID, GetApplicationEventTarget(), 0, &hotKeySelection)
+        let shotID = EventHotKeyID(signature: OSType(0x46555949), id: 2)
+        let shotResult = RegisterEventHotKey(UInt32(kVK_ANSI_S), UInt32(optionKey), shotID, GetApplicationEventTarget(), 0, &hotKeyScreenshot)
+
+        if selResult != noErr && shotResult != noErr {
+            model.status = "⌃⌥T 与 ⌥S 快捷键被占用；仍可使用划词工具栏与菜单栏。"
+        } else if selResult != noErr {
+            model.status = "⌃⌥T 快捷键被占用；仍可使用划词工具栏与菜单栏。"
+        } else if shotResult != noErr {
+            model.status = "⌥S 快捷键被占用；仍可从菜单栏使用截图翻译。"
+        }
     }
 
     @objc func openMain() { showMain() }
+    @objc func openSnippets() { model.openSnippets() }
     @objc func toggle() { model.toggleEnabled() }
     @objc func selection() { monitor.readSelection() }
-    @objc func translateSelection(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
-        guard let raw = pasteboard.string(forType: .string), !TextLogic.clean(raw).isEmpty else {
-            error.pointee = "选区没有可读取的文字。"; return
-        }
-        model.presentSelection(TextLogic.clean(raw))
-    }
 
     @objc func screenshot() {
         guard !model.capturingRegion else { return }
         model.refreshPermissions()
         guard model.screenPermission else { model.requestScreen(); showMain(); return }
+        monitor.clearToolbar()
         model.dismiss(force: true)
         model.capturingRegion = true
+        let hideMain = window?.isVisible == true && NSApp.isActive
+        if hideMain { window?.orderOut(nil) }
         Task {
             defer { model.capturingRegion = false }
+            if hideMain { try? await Task.sleep(nanoseconds: 140_000_000) }
             var dropPoint = NSEvent.mouseLocation
             do {
-                guard let text = try await RegionCapture.text(onCaptured: {
-                    await MainActor.run { dropPoint = NSEvent.mouseLocation }
-                }) else { return }
-                model.present(CapturedText(text: text, bounds: .zero, method: "截图 OCR"), cocoaAnchor: CGRect(origin: dropPoint, size: CGSize(width: 1, height: 1)), selection: true)
+                guard let ocr = try await RegionCapture.capture(onCaptured: {
+                    await MainActor.run {
+                        dropPoint = NSEvent.mouseLocation
+                        self.model.presentRegionRecognizing(at: CGRect(origin: dropPoint, size: CGSize(width: 1, height: 1)))
+                    }
+                }) else {
+                    if hideMain { showMain() }
+                    return
+                }
+                model.presentRegionResult(ocr, cocoaAnchor: CGRect(origin: dropPoint, size: CGSize(width: 1, height: 1)))
             } catch {
-                model.status = error.localizedDescription
-                showMain()
+                model.dismiss(force: true)
+                model.flashToast(error.localizedDescription, at: dropPoint)
             }
         }
     }
@@ -329,7 +445,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return true
     }
     func applicationWillTerminate(_ notification: Notification) {
-        if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let hotKeySelection { UnregisterEventHotKey(hotKeySelection) }
+        if let hotKeyScreenshot { UnregisterEventHotKey(hotKeyScreenshot) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
     }
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -467,8 +584,22 @@ struct Entry {
                 DiagnosticCheck.require(board.string(forType: .string) == "copied meanwhile", "A copy made meanwhile is never overwritten")
                 board.releaseGlobally()
                 let pasteKey = KeyboardLayout.keyCode(for: "v")
-                DiagnosticCheck.require(pasteKey != nil, "The current keyboard layout resolves the ⌘V key")
-                print("Replacement checks passed: edge whitespace, transient clipboard lease, restore safety, paste key \(pasteKey!) for the current layout.")
+                let copyKey = KeyboardLayout.keyCode(for: "c")
+                DiagnosticCheck.require(pasteKey != nil && copyKey != nil, "The current keyboard layout resolves ⌘V and ⌘C keys")
+                // Snippet store non-destructive Markdown append check in a private temp directory.
+                let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("HoverTranslate-SnippetCheck-\(UUID().uuidString)")
+                let tempMD = tempDir.appendingPathComponent("摘录.md")
+                let tempJSON = tempDir.appendingPathComponent("snippets.json")
+                defer { try? FileManager.default.removeItem(at: tempDir) }
+                let firstSnippet = Snippet(text: "Stay curious.", translation: "保持好奇。", appName: "Safari")
+                try! SnippetStore.saveIndex([firstSnippet], to: tempJSON)
+                try! SnippetStore.appendMarkdown(firstSnippet, to: tempMD)
+                let loaded = SnippetStore.load(from: tempJSON)
+                let mdContent = try! String(contentsOf: tempMD, encoding: .utf8)
+                DiagnosticCheck.require(loaded.count == 1 && loaded[0].text == "Stay curious." && loaded[0].translation == "保持好奇。", "Snippet JSON round-trip works")
+                DiagnosticCheck.require(mdContent.contains("> Stay curious.") && mdContent.contains("保持好奇。") && mdContent.contains("Safari"), "Markdown append formats blockquote, translation, and app name")
+                print("Snippet store checks passed: JSON round-trip and non-destructive Markdown append.")
+                print("Replacement checks passed: edge whitespace, transient clipboard lease, restore safety, paste key \(pasteKey!), copy key \(copyKey!) for the current layout.")
                 print("Polling checks passed: idle when paused, active for badges and enabled translation.")
                 print("Selection-card checks passed: preview gating, native fallback, read-only mode, busy state, invalid target and clipboard safety.")
                 print("Capture safety and hover-flow checks passed: own-element and own-selection rejection, remote element acceptance, permission publication, subtitle opening and dismissal.")

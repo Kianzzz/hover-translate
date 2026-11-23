@@ -104,6 +104,7 @@ final class AppModel: ObservableObject {
     @Published var page = "home"
     @Published var enabled = false
     @Published var hoverEnabled = true { didSet { defaults?.set(hoverEnabled, forKey: "hoverEnabled") } }
+    @Published var selectionToolbarEnabled = true { didSet { defaults?.set(selectionToolbarEnabled, forKey: "selectionToolbarEnabled") } }
     @Published var ocrEnabled = true { didSet { defaults?.set(ocrEnabled, forKey: "ocrEnabled") } }
     @Published var delay = 0.6 { didSet { defaults?.set(delay, forKey: "hoverDelay") } }
     @Published var closeDelay = 0.0 { didSet { defaults?.set(closeDelay, forKey: "closeDelay") } }
@@ -141,11 +142,24 @@ final class AppModel: ObservableObject {
     @Published var pinned = false
     @Published var copied = false
     @Published var copiedSource = false
+    @Published var savedCurrent = false
+    @Published var sourceAppName: String?
+    @Published var regionMergeLines = true
+    @Published var recognizingRegion = false
+    @Published var toastMessage = ""
+    @Published var snippets: [Snippet] = []
+    @Published var snippetsMarkdownPath = SnippetStore.defaultMarkdownURL.path {
+        didSet { defaults?.set(snippetsMarkdownPath, forKey: "snippetsMarkdownPath") }
+    }
+    @Published var translatingSnippetID: UUID?
     @Published var status = "准备就绪"
     @Published var manualText = "Good design makes complex things feel simple."
     @Published private(set) var isReplacing = false
     @Published private(set) var replacementMessage = ""
     @Published private var replacementTarget: ReplacementTarget?
+    private var regionRawText: String?
+    private var regionMergedText: String?
+    private var toastTask: Task<Void, Never>?
     private var replacementTask: Task<Void, Never>?
     private var replacementID = UUID()
     private let translator = LocalTranslator()
@@ -156,15 +170,29 @@ final class AppModel: ObservableObject {
     private let defaults: UserDefaults?
     var showCard: ((CGRect) -> Void)?
     var hideCard: (() -> Void)?
+    var showToast: ((String, CGPoint) -> Void)?
+    var hideToast: (() -> Void)?
+    var showSelectionToolbar: ((CGRect) -> Void)?
+    var hideSelectionToolbar: (() -> Void)?
+    var toolbarActionTranslate: (() -> Void)?
+    var toolbarActionCopy: (() -> Void)?
+    var toolbarActionSave: (() -> Void)?
     var startScreenshot: (() -> Void)?
     var showWindow: (() -> Void)?
     var pointerInCard: (() -> Bool)?
+    var pointerInToolbar: (() -> Bool)?
     var stageHover: ((CapturedText, CGRect, CGPoint, Bool) -> Void)?
     var clearHover: (() -> Void)?
     var releasePanelFocus: (() -> Void)?
     var anchor = CGRect.zero
     private(set) var selectionVisible = false
     private(set) var isPresenting = false
+
+    var canToggleRegionMerge: Bool {
+        method == "截图 OCR" && !recognizingRegion
+            && regionRawText != nil && regionMergedText != nil
+            && regionRawText != regionMergedText
+    }
 
     var hasReplacementTarget: Bool { selectionVisible && replacementTarget != nil }
     var showsReplacementControls: Bool { hasReplacementTarget || !replacementMessage.isEmpty }
@@ -223,6 +251,7 @@ final class AppModel: ObservableObject {
             if d.object(forKey: "hoverDelay") != nil { delay = min(1.5, max(0.3, d.double(forKey: "hoverDelay"))) }
             if d.object(forKey: "closeDelay") != nil { closeDelay = min(1, max(0, d.double(forKey: "closeDelay"))) }
             if d.object(forKey: "hoverEnabled") != nil { hoverEnabled = d.bool(forKey: "hoverEnabled") }
+            if d.object(forKey: "selectionToolbarEnabled") != nil { selectionToolbarEnabled = d.bool(forKey: "selectionToolbarEnabled") }
             if d.object(forKey: "ocrEnabled") != nil { ocrEnabled = d.bool(forKey: "ocrEnabled") }
             provider = AIProvider(rawValue: d.string(forKey: "translationProvider") ?? "") ?? .apple
             Task { await refreshProviders() }
@@ -230,6 +259,8 @@ final class AppModel: ObservableObject {
             wordMode = d.bool(forKey: "wordMode")
             if let native = d.string(forKey: "nativeLanguage") { nativeLanguage = native }
             if let preferred = d.string(forKey: "targetLanguage") { targetLanguage = preferred }
+            if let mdPath = d.string(forKey: "snippetsMarkdownPath"), !mdPath.isEmpty { snippetsMarkdownPath = mdPath }
+            snippets = SnippetStore.load()
             enabled = d.bool(forKey: "globalEnabled")
             refreshPermissions()
             if enabled { updatePermissionStatus() }
@@ -246,11 +277,17 @@ final class AppModel: ObservableObject {
         status = accessibility ? "系统取词权限已生效" : "当前版本的取词权限尚未生效 · 请确认添加的是当前浮译应用"
     }
 
-    var subtitleText: String { phase == .loading ? "正在翻译…" : result.components(separatedBy: .newlines).joined(separator: " ") }
+    var subtitleText: String {
+        if !toastMessage.isEmpty { return toastMessage }
+        return phase == .loading ? "正在翻译…" : result.components(separatedBy: .newlines).joined(separator: " ")
+    }
     var cardWidth: CGFloat {
         let headerLabels = TextLogic.displayName(sourceLanguage) + " → " + TextLogic.displayName(target)
         let labelWidth = ceil((headerLabels as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width)
-        let buttonsWidth: CGFloat = method == "截图 OCR" ? 94 : 70
+        var buttonCount = 4 // save, pin, copy, close
+        if method == "截图 OCR" { buttonCount += 1 }
+        if canToggleRegionMerge { buttonCount += 1 }
+        let buttonsWidth = CGFloat(buttonCount * 23)
         let headerMinimum = max(CardLayout.minimumWidth, ceil(14 + 17 + 18 + labelWidth + 24 + buttonsWidth + 8))
         return CardLayout.width(source: source, result: phase == .result ? result : "", minimumWidth: headerMinimum)
     }
@@ -366,9 +403,10 @@ final class AppModel: ObservableObject {
         else { status = "等待悬停外语" }
     }
 
-    func present(_ capture: CapturedText, cocoaAnchor: CGRect, selection: Bool, replacement: ReplacementTarget? = nil) {
+    func present(_ capture: CapturedText, cocoaAnchor: CGRect, selection: Bool, replacement: ReplacementTarget? = nil, appName: String? = nil) {
         guard !pinned else { return }
         clearReplacement()
+        clearToast()
         if selection { clearHover?() }
         isPresenting = true
         selectionVisible = selection
@@ -379,10 +417,17 @@ final class AppModel: ObservableObject {
         translationTask?.cancel()
         translationTask = nil
         requestID = UUID()
+        if capture.method != "截图 OCR" {
+            regionRawText = nil
+            regionMergedText = nil
+        }
+        if recognizingRegion { recognizingRegion = false }
         source = capture.text
         method = capture.method
+        sourceAppName = appName
         anchor = cocoaAnchor
         copiedSource = false
+        savedCurrent = false
         if pinned { pinned = false }
         sourceLanguage = TextLogic.language(of: capture.text, japaneseKanji: japaneseKanji)
         let resolvedTarget = TextLogic.target(for: sourceLanguage, preferred: targetLanguage, native: nativeLanguage)
@@ -393,6 +438,65 @@ final class AppModel: ObservableObject {
         translate(to: resolvedTarget)
     }
 
+    func presentRegionRecognizing(at cocoaAnchor: CGRect) {
+        dismiss(force: true)
+        clearToast()
+        isPresenting = true
+        selectionVisible = true
+        recognizingRegion = true
+        regionRawText = nil
+        regionMergedText = nil
+        method = "截图 OCR"
+        sourceAppName = "截图 OCR"
+        source = "正在识别截图中的文字…"
+        result = ""
+        copied = false
+        copiedSource = false
+        savedCurrent = false
+        anchor = cocoaAnchor
+        phase = .loading
+        showCard?(anchor)
+    }
+
+    func presentRegionResult(_ ocr: RegionOCRResult, cocoaAnchor: CGRect) {
+        regionRawText = ocr.raw
+        regionMergedText = ocr.merged
+        regionMergeLines = true
+        recognizingRegion = false
+        present(CapturedText(text: ocr.merged, bounds: .zero, method: "截图 OCR"),
+                cocoaAnchor: cocoaAnchor, selection: true, appName: "截图 OCR")
+    }
+
+    func toggleRegionMerge() {
+        guard canToggleRegionMerge, let raw = regionRawText, let merged = regionMergedText else { return }
+        regionMergeLines.toggle()
+        source = regionMergeLines ? merged : raw
+        copiedSource = false
+        savedCurrent = false
+        translate(to: target)
+    }
+
+    func flashToast(_ message: String, at point: CGPoint = NSEvent.mouseLocation) {
+        toastTask?.cancel()
+        toastMessage = message
+        status = message
+        showToast?(message, point)
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.clearToast()
+        }
+    }
+
+    func clearToast() {
+        toastTask?.cancel()
+        toastTask = nil
+        if !toastMessage.isEmpty {
+            toastMessage = ""
+            hideToast?()
+        }
+    }
+
     func translate(to language: String) {
         guard !isReplacing else { return }
         translationTask?.cancel()
@@ -400,6 +504,7 @@ final class AppModel: ObservableObject {
         requestID = id
         if target != language { target = language }
         if copied { copied = false }
+        if savedCurrent { savedCurrent = false }
         if missingPack != nil { missingPack = nil }
         let input = source, from = sourceLanguage, activeProvider = provider
         if let cached = translator.cached(provider: activeProvider, text: input, from: from, to: language) {
@@ -434,7 +539,7 @@ final class AppModel: ObservableObject {
 
     func dismiss(force: Bool = false) {
         guard force || !pinned else { return }
-        let hasState = isPresenting || selectionVisible || translationTask != nil
+        let hasState = isPresenting || selectionVisible || recognizingRegion || translationTask != nil
             || replacementTarget != nil || isReplacing || !replacementMessage.isEmpty
             || pinned || missingPack != nil
         guard hasState else {
@@ -444,6 +549,9 @@ final class AppModel: ObservableObject {
         clearReplacement()
         isPresenting = false
         selectionVisible = false
+        if recognizingRegion { recognizingRegion = false }
+        regionRawText = nil
+        regionMergedText = nil
         translationTask?.cancel()
         translationTask = nil
         requestID = UUID()
@@ -467,22 +575,152 @@ final class AppModel: ObservableObject {
         status = "已复制提取的原文"
     }
 
+    @discardableResult
+    func saveSnippet(text: String, translation: String? = nil, sourceLanguage: String? = nil,
+                     targetLanguage: String? = nil, appName: String? = nil) -> Bool {
+        let cleaned = TextLogic.clean(text)
+        guard !cleaned.isEmpty else { return false }
+        let cleanTrans = translation.map(TextLogic.clean).flatMap { $0.isEmpty ? nil : $0 }
+        let now = Date()
+        if let newest = snippets.first, newest.text == cleaned, newest.translation == cleanTrans,
+           now.timeIntervalSince(newest.createdAt) < 5 {
+            status = "该内容已在摘录本中"
+            return true
+        }
+        let saved: Snippet
+        if let idx = snippets.firstIndex(where: { $0.text == cleaned && $0.translation == nil && now.timeIntervalSince($0.createdAt) < 120 }),
+           let cleanTrans {
+            snippets[idx].translation = cleanTrans
+            snippets[idx].sourceLanguage = sourceLanguage ?? snippets[idx].sourceLanguage
+            snippets[idx].targetLanguage = targetLanguage ?? snippets[idx].targetLanguage
+            saved = snippets[idx]
+        } else {
+            saved = Snippet(text: cleaned, translation: cleanTrans,
+                            sourceLanguage: sourceLanguage, targetLanguage: targetLanguage,
+                            appName: appName, createdAt: now)
+            snippets.insert(saved, at: 0)
+        }
+        if defaults != nil {
+            try? SnippetStore.saveIndex(snippets)
+            do {
+                try SnippetStore.appendMarkdown(saved, to: URL(fileURLWithPath: snippetsMarkdownPath))
+                status = "已保存到摘录本 · \(URL(fileURLWithPath: snippetsMarkdownPath).lastPathComponent)"
+            } catch {
+                status = "已存入摘录本（写入 Markdown 失败：\(error.localizedDescription)）"
+            }
+        }
+        return true
+    }
+
+    func saveCurrentCard() {
+        guard !recognizingRegion else { return }
+        let trans = phase == .result ? result : nil
+        if saveSnippet(text: source, translation: trans, sourceLanguage: sourceLanguage,
+                       targetLanguage: trans != nil ? target : nil, appName: sourceAppName ?? method) {
+            savedCurrent = true
+        }
+    }
+
+    func deleteSnippet(_ id: UUID) {
+        snippets.removeAll { $0.id == id }
+        if defaults != nil { try? SnippetStore.saveIndex(snippets) }
+        status = "已从摘录本移除"
+    }
+
+    func translateSnippetInPlace(_ snippet: Snippet) {
+        guard translatingSnippetID == nil else { return }
+        translatingSnippetID = snippet.id
+        let src = snippet.sourceLanguage ?? TextLogic.language(of: snippet.text, japaneseKanji: japaneseKanji)
+        let dst = TextLogic.target(for: src, preferred: targetLanguage, native: nativeLanguage)
+        let activeProvider = provider
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.translatingSnippetID = nil }
+            do {
+                let output: String
+                if activeProvider == .apple {
+                    output = try await translator.translate(snippet.text, from: src, to: dst)
+                } else {
+                    output = try await activeProvider.translate(snippet.text, from: src, to: dst)
+                    translator.store(output, provider: activeProvider, text: snippet.text, from: src, to: dst)
+                }
+                if let idx = snippets.firstIndex(where: { $0.id == snippet.id }) {
+                    snippets[idx].translation = output
+                    snippets[idx].sourceLanguage = src
+                    snippets[idx].targetLanguage = dst
+                    if defaults != nil {
+                        try? SnippetStore.saveIndex(snippets)
+                        try? SnippetStore.appendMarkdown(snippets[idx], to: URL(fileURLWithPath: snippetsMarkdownPath))
+                    }
+                    status = "已为摘录补充译文"
+                }
+            } catch {
+                status = "补译失败：" + error.localizedDescription
+            }
+        }
+    }
+
+    func chooseSnippetsMarkdownLocation() {
+        let panel = NSOpenPanel()
+        panel.title = "选择摘录 Markdown 文件或文件夹"
+        panel.message = "选已有 .md 文件将直接追加内容；选文件夹（如 Obsidian 笔记库）将在其中自动创建「浮译摘录.md」。"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: snippetsMarkdownPath).deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            snippetsMarkdownPath = url.appendingPathComponent("浮译摘录.md").path
+        } else {
+            snippetsMarkdownPath = url.path
+        }
+        status = "摘录保存路径已更新为 \(URL(fileURLWithPath: snippetsMarkdownPath).lastPathComponent)"
+    }
+
+    func openSnippetsMarkdownFile() {
+        let url = URL(fileURLWithPath: snippetsMarkdownPath)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let content = snippets.isEmpty ? "# 浮译摘录\n\n" : SnippetStore.exportMarkdown(snippets)
+            try? content.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    func revealSnippetsMarkdownFile() {
+        let url = URL(fileURLWithPath: snippetsMarkdownPath)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([url.deletingLastPathComponent()])
+        }
+    }
+
+    func resetSnippetsMarkdownPath() {
+        snippetsMarkdownPath = SnippetStore.defaultMarkdownURL.path
+        status = "已恢复默认摘录路径"
+    }
+
+    func openSnippets() { page = "snippets"; showWindow?() }
+
     func clipboard() {
         guard let text = NSPasteboard.general.string(forType: .string), !TextLogic.clean(text).isEmpty else {
-            status = "剪贴板中没有文字"; showWindow?(); return
+            flashToast("剪贴板中没有文字"); return
         }
         dismiss(force: true)
         let mouse = NSEvent.mouseLocation
         present(CapturedText(text: TextLogic.clean(text), bounds: .zero, method: "剪贴板 · 手动触发"),
-                cocoaAnchor: CGRect(origin: mouse, size: CGSize(width: 8, height: 18)), selection: true)
+                cocoaAnchor: CGRect(origin: mouse, size: CGSize(width: 8, height: 18)), selection: true, appName: "剪贴板")
     }
 
-    func presentSelection(_ text: String) {
+    func presentSelection(_ text: String, appName: String? = "文字试用") {
         let cleaned = TextLogic.clean(text)
         guard !cleaned.isEmpty else { return }
         dismiss(force: true)
-        present(CapturedText(text: cleaned, bounds: .zero, method: "右键选区"),
-                cocoaAnchor: CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 1, height: 1)), selection: true)
+        present(CapturedText(text: cleaned, bounds: .zero, method: "选中文字"),
+                cocoaAnchor: CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 1, height: 1)), selection: true, appName: appName)
     }
 
     func manualTranslate() {
@@ -491,7 +729,7 @@ final class AppModel: ObservableObject {
         let rect = NSApp.keyWindow.map { CGRect(x: $0.frame.midX - 200, y: $0.frame.midY + 80, width: 400, height: 30) }
             ?? CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 20, height: 20))
         dismiss(force: true)
-        present(CapturedText(text: text, bounds: .zero, method: "文字试用"), cocoaAnchor: rect, selection: true)
+        present(CapturedText(text: text, bounds: .zero, method: "文字试用"), cocoaAnchor: rect, selection: true, appName: "文字试用")
     }
 
     func settings() { page = "settings"; showWindow?() }

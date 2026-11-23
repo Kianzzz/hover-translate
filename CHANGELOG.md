@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- Add a floating selection mini-toolbar (`翻译` / `复制` / `保存`) beside selected text, replacing the hidden macOS Services right-click menu.
+- Upgrade selection capture to a 3-tier pipeline: AX selected text, AX range / WebKit-Chromium text marker range, and explicit-action transient `⌘C` fallback with instant clipboard restoration so Chrome, Electron, PDF, and Terminal selections work reliably.
+- Add built-in **摘录本 (Snippets)** with search, copy, in-place translation, and non-destructive local Markdown append (default `~/Documents/浮译摘录.md`, customizable to any Obsidian vault or folder), plus one-click bookmarking on translation cards.
+- Add global shortcut `⌥S` for region screenshot translation, auto-hide the main window when triggered from within the app, show an immediate "recognizing…" card after region capture, and add smart paragraph line-merging with a toggle in the card header.
+
 ## 0.5.6
 
 - Eliminate idle SwiftUI relayout loops caused by unconditional `@Published` mutations in `dismiss()` / `clearReplacement()` during global input and pointer movement.

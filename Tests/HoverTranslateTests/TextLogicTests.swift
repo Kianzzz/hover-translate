@@ -114,6 +114,18 @@ struct CoreChecks {
         expect(TextLogic.ocrSentence(lines: menu, hit: 0, offset: 3) == "Keep in Dock", "短菜单项不能拼成段落")
         let missing = [ocrLine("Text on the first line of a longer paragraph", 100, 100), ocrLine("Text in a distant paragraph should not join.", 100, 260)]
         expect(TextLogic.ocrSentence(lines: missing, hit: 0, offset: 10) == missing[0].text, "较大空隙不能跨越")
+        let regionLines = [
+            TextLogic.OCRLine(text: "Earlier sentence. This is a long sentence that", bounds: CGRect(x: 0.1, y: 0.10, width: 0.5, height: 0.04)),
+            TextLogic.OCRLine(text: "continues on the next line smoothly.", bounds: CGRect(x: 0.1, y: 0.15, width: 0.4, height: 0.04)),
+            TextLogic.OCRLine(text: "Keep in Dock", bounds: CGRect(x: 0.1, y: 0.30, width: 0.2, height: 0.04)),
+            TextLogic.OCRLine(text: "Open at Login", bounds: CGRect(x: 0.1, y: 0.35, width: 0.2, height: 0.04))
+        ]
+        expect(TextLogic.mergeOCRParagraphs(lines: regionLines) == "Earlier sentence. This is a long sentence that continues on the next line smoothly.\nKeep in Dock\nOpen at Login", "截图 OCR 自动合并同段换行并保留短项分行")
+        let regionCJK = [
+            TextLogic.OCRLine(text: "这是截图识别出来的第一行较长中文内容", bounds: CGRect(x: 0.1, y: 0.10, width: 0.6, height: 0.04)),
+            TextLogic.OCRLine(text: "紧接着第二行继续完成这句话。", bounds: CGRect(x: 0.1, y: 0.15, width: 0.4, height: 0.04))
+        ]
+        expect(TextLogic.mergeOCRParagraphs(lines: regionCJK) == "这是截图识别出来的第一行较长中文内容紧接着第二行继续完成这句话。", "截图 OCR 中文段落合并不插入空格")
         // Replacement keeps the selection's own surrounding whitespace.
         expect(TextLogic.preservingEdgeWhitespace(of: "hello ", around: "你好") == "你好 ", "替换保留选区尾随空格")
         expect(TextLogic.preservingEdgeWhitespace(of: "\n  Good design.\t", around: "好的设计。") == "\n  好的设计。\t", "替换保留选区首尾换行与缩进")

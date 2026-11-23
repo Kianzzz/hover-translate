@@ -4,6 +4,7 @@ import ScreenCaptureKit
 import Vision
 import NaturalLanguage
 import CoreML
+import Carbon
 
 private final class CancellationFlag: @unchecked Sendable {
     private let lock = NSLock()
@@ -120,7 +121,7 @@ enum TextCapture {
                 let focused = ref as! AXUIElement
                 AXUIElementSetMessagingTimeout(focused, 0.3)
                 if isProtected(focused) { continuation.resume(throwing: CaptureError.protectedText); return }
-                guard let raw = attribute(focused, kAXSelectedTextAttribute) as? String,
+                guard let raw = readSelectedText(from: focused),
                       !TextLogic.clean(raw).isEmpty else {
                     continuation.resume(throwing: CaptureError.nothingSelected); return
                 }
@@ -139,6 +140,100 @@ enum TextCapture {
                     replacement: replacement))
             }
         }
+    }
+
+    private static func readSelectedText(from element: AXUIElement) -> String? {
+        if let direct = attribute(element, kAXSelectedTextAttribute) as? String, !TextLogic.clean(direct).isEmpty {
+            return direct
+        }
+        // Tier 1B: range + StringForRange / AXValue substring.
+        if let rangeRef = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(rangeRef) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(rangeRef as! AXValue, .cfRange, &range), range.length > 0 {
+                var strRef: CFTypeRef?
+                if AXUIElementCopyParameterizedAttributeValue(element, kAXStringForRangeParameterizedAttribute as CFString, rangeRef, &strRef) == .success,
+                   let str = strRef as? String, !TextLogic.clean(str).isEmpty {
+                    return str
+                }
+                if let value = attribute(element, kAXValueAttribute) as? String {
+                    let ns = value as NSString
+                    if range.location >= 0, range.location <= ns.length, range.length <= ns.length - range.location {
+                        let slice = ns.substring(with: NSRange(location: range.location, length: range.length))
+                        if !TextLogic.clean(slice).isEmpty { return slice }
+                    }
+                }
+            }
+        }
+        // Tier 1C: WebKit / Chromium / Electron text marker ranges.
+        if let markerRange = attribute(element, "AXSelectedTextMarkerRange") {
+            var strRef: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(element, "AXStringForTextMarkerRange" as CFString, markerRange, &strRef) == .success,
+               let str = strRef as? String, !TextLogic.clean(str).isEmpty {
+                return str
+            }
+        }
+        return nil
+    }
+
+    /// Quick UI-control filter so window drags, scrollbars, and sliders do not summon the selection toolbar.
+    @MainActor
+    static func selectionContext(at quartzPoint: CGPoint, pid: pid_t) -> (allowed: Bool, protected: Bool) {
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return (false, false) }
+        guard let hit = elementAt(quartzPoint) else { return (true, false) }
+        if (try? requireExternalElement(hit)) == nil { return (false, false) }
+        if isProtected(hit) { return (false, true) }
+        let role = attribute(hit, kAXRoleAttribute) as? String ?? ""
+        let ignoredRoles: Set<String> = [
+            "AXScrollBar", "AXValueIndicator", "AXSlider", "AXSplitter", "AXGrowArea",
+            "AXToolbar", "AXToolbarButton", "AXCloseButton", "AXZoomButton", "AXMinimizeButton",
+            "AXFullScreenButton", "AXMenuBar", "AXMenuBarItem", "AXDockItem", "AXTabGroup"
+        ]
+        if ignoredRoles.contains(role) { return (false, false) }
+        return (true, false)
+    }
+
+    /// Tier 2 fallback: on explicit user action, transiently issue ⌘C to read selections
+    /// from Chromium/Electron/PDF/Terminal apps that omit AXSelectedText, then restore the clipboard.
+    @MainActor
+    static func copySelectionViaClipboard(pid: pid_t, keepOnClipboard: Bool = false) async -> String? {
+        guard pid != ProcessInfo.processInfo.processIdentifier,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return nil }
+        // Never simulate ⌘C in a protected password field.
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.15)
+        if let ref = attribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(ref) == AXUIElementGetTypeID() {
+            let focused = ref as! AXUIElement
+            AXUIElementSetMessagingTimeout(focused, 0.15)
+            if isProtected(focused) { return nil }
+        }
+        let key = KeyboardLayout.keyCode(for: "c") ?? CGKeyCode(kVK_ANSI_C)
+        guard let source = CGEventSource(stateID: .combinedSessionState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { return nil }
+
+        let board = NSPasteboard.general
+        let savedItems = keepOnClipboard ? [] : PasteboardLease.snapshot(board)
+        let beforeCount = board.changeCount
+
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        down.postToPid(pid)
+        up.postToPid(pid)
+
+        let deadline = Date().addingTimeInterval(0.24)
+        while board.changeCount == beforeCount && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 15_000_000)
+            if Task.isCancelled { break }
+        }
+        guard board.changeCount != beforeCount else { return nil }
+        let copiedCount = board.changeCount
+        let text = board.string(forType: .string).map(TextLogic.clean)
+        if !keepOnClipboard && board.changeCount == copiedCount {
+            board.clearContents()
+            if !savedItems.isEmpty { board.writeObjects(savedItems) }
+        }
+        guard let text, !text.isEmpty else { return nil }
+        return text
     }
 
     @MainActor

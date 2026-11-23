@@ -197,8 +197,13 @@ enum AIProvider: String, CaseIterable {
     }
 }
 
+struct RegionOCRResult: Sendable {
+    let raw: String
+    let merged: String
+}
+
 enum RegionCapture {
-    static func text(onCaptured: (@Sendable () async -> Void)? = nil) async throws -> String? {
+    static func capture(onCaptured: (@Sendable () async -> Void)? = nil) async throws -> RegionOCRResult? {
         let fm = FileManager.default
         let directory = fm.temporaryDirectory.appendingPathComponent("HoverTranslate-Region-\(UUID().uuidString)")
         try fm.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -216,11 +221,15 @@ enum RegionCapture {
         await onCaptured?()
         // Run Vision off the caller actor so MainActor UI stays responsive.
         return try await Task.detached(priority: .userInitiated) {
-            try RegionCapture.recognize(file)
+            try RegionCapture.recognizeDetailed(file)
         }.value
     }
 
     static func recognize(_ file: URL) throws -> String {
+        try recognizeDetailed(file).raw
+    }
+
+    static func recognizeDetailed(_ file: URL) throws -> RegionOCRResult {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.automaticallyDetectsLanguage = true
@@ -228,11 +237,15 @@ enum RegionCapture {
         request.recognitionLanguages = try TextCapture.accurateLanguages(request)
         try VNImageRequestHandler(url: file).perform([request])
         // Preserve Vision's built-in reading order (handles multi-column layouts cleanly).
-        let text = (request.results ?? []).compactMap { observation -> String? in
+        let lines: [TextLogic.OCRLine] = (request.results ?? []).compactMap { observation in
             guard let candidate = observation.topCandidates(1).first, candidate.confidence >= 0.35 else { return nil }
-            return candidate.string
-        }.joined(separator: "\n")
-        guard !text.isEmpty else { throw ToolError.message("框选区域没有识别到文字。") }
-        return text
+            let b = observation.boundingBox
+            let topLeft = CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height)
+            return TextLogic.OCRLine(text: candidate.string, bounds: topLeft)
+        }
+        let raw = lines.map(\.text).joined(separator: "\n")
+        guard !raw.isEmpty else { throw ToolError.message("框选区域没有识别到文字。") }
+        let merged = TextLogic.mergeOCRParagraphs(lines: lines)
+        return RegionOCRResult(raw: raw, merged: merged.isEmpty ? raw : merged)
     }
 }

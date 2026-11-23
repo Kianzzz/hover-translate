@@ -271,6 +271,31 @@ enum TextLogic {
         return segment(joined, utf16Offset: hitOffset, word: false)
     }
 
+    /// Merge visually wrapped lines within the same paragraph for region OCR,
+    /// while keeping paragraph breaks, short headings/menus, and separate columns intact.
+    static func mergeOCRParagraphs(lines: [OCRLine]) -> String {
+        guard !lines.isEmpty else { return "" }
+        var output = lines[0].text
+        var previous = lines[0]
+        for current in lines.dropFirst() {
+            let height = max(previous.bounds.height, current.bounds.height)
+            let gap = current.bounds.minY - previous.bounds.maxY
+            let aligned = abs(previous.bounds.minX - current.bounds.minX) <= max(0.03, height * 1.5)
+            let sameColumn = current.bounds.midY > previous.bounds.midY && gap >= -height * 0.25 && gap <= height * 1.15
+            let looksLikeProse = visualLength(previous.text) >= 24
+            if aligned && sameColumn && looksLikeProse {
+                let bothCJK = output.unicodeScalars.last.map(isCJKScalar) == true
+                    && current.text.unicodeScalars.first.map(isCJKScalar) == true
+                if !bothCJK { output += " " }
+                output += current.text
+            } else {
+                output += "\n" + current.text
+            }
+            previous = current
+        }
+        return clean(output)
+    }
+
     /// Cocoa uses bottom-left screen coordinates; AX and screen capture use top-left.
     static func quartzPoint(_ cocoa: CGPoint, desktopTop: CGFloat) -> CGPoint {
         CGPoint(x: cocoa.x, y: desktopTop - cocoa.y)

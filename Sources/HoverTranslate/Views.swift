@@ -62,6 +62,7 @@ struct MainView: View {
                 ScrollView {
                     Group {
                         if model.page == "settings" { SettingsView(model: model) }
+                        else if model.page == "snippets" { SnippetsView(model: model) }
                         else if model.page == "try" { TryView(model: model) }
                         else { HomeView(model: model) }
                     }.padding(.horizontal, 40).padding(.top, 48).padding(.bottom, 32)
@@ -72,6 +73,9 @@ struct MainView: View {
                     Text(model.status).font(.system(size: 11)).lineLimit(1)
                     Spacer()
                     Text("⌃⌥T 翻译选区").font(.system(size: 10, weight: .medium, design: .rounded))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Palette.sidebar).clipShape(Capsule())
+                    Text("⌥S 截图翻译").font(.system(size: 10, weight: .medium, design: .rounded))
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Palette.sidebar).clipShape(Capsule())
                 }.foregroundStyle(Palette.secondary).padding(.horizontal, 40).padding(.vertical, 12)
@@ -111,7 +115,7 @@ struct MainView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.6"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.0"
     }
 
     private var sidebar: some View {
@@ -129,6 +133,7 @@ struct MainView: View {
                 }
             }.padding(.horizontal, 6).padding(.bottom, 34)
             nav("home", "开始使用", "sparkles")
+            nav("snippets", "摘录本", "bookmark", badge: model.snippets.isEmpty ? nil : "\(model.snippets.count)")
             nav("try", "翻译试用", "text.bubble")
             nav("settings", "偏好设置", "slider.horizontal.3")
             Spacer()
@@ -159,7 +164,7 @@ struct MainView: View {
             .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Palette.line, lineWidth: 1))
     }
 
-    private func nav(_ id: String, _ title: String, _ symbol: String) -> some View {
+    private func nav(_ id: String, _ title: String, _ symbol: String, badge: String? = nil) -> some View {
         let active = model.page == id
         return Button { model.page = id } label: {
             HStack(spacing: 10) {
@@ -167,6 +172,13 @@ struct MainView: View {
                     .foregroundStyle(active ? Palette.green : Palette.secondary)
                 Text(title).font(.system(size: 13, weight: active ? .semibold : .regular))
                 Spacer()
+                if let badge {
+                    Text(badge).font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(active ? Palette.green : Palette.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 1.5)
+                        .background(active ? Palette.mint : Palette.paper)
+                        .clipShape(Capsule())
+                }
             }.padding(.horizontal, 10).padding(.vertical, 9)
                 .background(active ? Palette.surface : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -194,16 +206,16 @@ struct HomeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             SectionHeading(eyebrow: "开始使用", title: "停一下，就读懂。",
-                           subtitle: "悬停查看一行译文，选中文字后可右键翻译。原文语种自动识别，默认译成\(TextLogic.displayName(model.targetLanguage))。")
+                           subtitle: "悬停查看一行译文，划词弹出快捷工具栏，随时 ⌥S 截图翻译。原文语种自动识别，默认译成\(TextLogic.displayName(model.targetLanguage))。")
             HStack(alignment: .top, spacing: 18) {
                 browserPreview
                 VStack(alignment: .leading, spacing: 20) {
                     step("1", "悬停外语", "停留片刻显示一行译文；\(TextLogic.displayName(model.nativeLanguage))文字不打扰。")
-                    step("2", "选中文字", "在右键菜单或其「服务」中点「浮译」。")
-                    step("3", "截图翻译", "从菜单栏框选区域，提取文字并翻译。")
+                    step("2", "划词工具栏", "选中文字旁出现「翻译 / 复制 / 保存」图标，也可按 ⌃⌥T 直接翻译。")
+                    step("3", "截图翻译 ⌥S", "按 ⌥S 框选任意区域，自动合段提取文字并翻译。")
                     Spacer(minLength: 0)
                     Button { model.startScreenshot?() } label: {
-                        Label("截图翻译…", systemImage: "viewfinder")
+                        Label("截图翻译  ⌥S", systemImage: "viewfinder")
                     }.buttonStyle(SoftButton(prominent: true))
                     Button { model.page = "try" } label: {
                         HStack(spacing: 6) { Text("试试自己的文字"); Image(systemName: "arrow.right") }
@@ -212,7 +224,7 @@ struct HomeView: View {
             }
             HStack(spacing: 14) {
                 feature("globe", "多语种原文", "自动识别英、日、韩、法、德等语言")
-                feature("text.cursor", "选区翻译与替换", "输入框先看译文，再决定是否替换")
+                feature("bookmark", "一键摘录保存", "存入内置摘录本并同步至本地 Markdown")
                 feature("lock", "翻译服务", "默认离线，可选本机已登录的 AI 服务")
             }
             HStack(spacing: 14) {
@@ -373,15 +385,20 @@ struct HoverSampleSensor: NSViewRepresentable {
 struct HoverSubtitle: View {
     @ObservedObject var model: AppModel
     var body: some View {
+        let isToast = !model.toastMessage.isEmpty
         HStack(spacing: 5) {
-            if model.phase == .failure {
+            if isToast {
+                Image(systemName: model.toastMessage.contains("已") ? "checkmark.circle.fill" : "info.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(model.toastMessage.contains("已") ? Palette.green : Color.secondary)
+            } else if model.phase == .failure {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.orange)
             }
             Text(model.subtitleText)
-                .font(.system(size: 12))
-                .foregroundStyle(model.phase == .failure ? Color.secondary : Color.primary)
+                .font(.system(size: 12, weight: isToast ? .medium : .regular))
+                .foregroundStyle(!isToast && model.phase == .failure ? Color.secondary : Color.primary)
                 .lineLimit(1)
         }
         .padding(.horizontal, 10)
@@ -405,7 +422,7 @@ struct TryView: View {
                     Text("\(model.manualText.count) / 8,000").font(.system(size: 11, design: .rounded))
                         .foregroundStyle(model.manualText.count > 8000 ? Color.red : Palette.secondary)
                 }.padding(.bottom, 12)
-                SelectionEditor(text: $model.manualText, translate: model.presentSelection)
+                SelectionEditor(text: $model.manualText, translate: { model.presentSelection($0) })
                     .padding(14).frame(height: 200)
                     .background(Palette.paper).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line, lineWidth: 1))
@@ -419,10 +436,10 @@ struct TryView: View {
             HStack(alignment: .top, spacing: 14) {
                 IconTile(symbol: "text.cursor", size: 34)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("在其他应用里试试选区翻译").font(.system(size: 13, weight: .semibold))
-                    Text("选中文字后右键，点「浮译」；部分应用将它放在「服务」里。也可以选中后按 ⌃⌥T 直接打开。")
+                    Text("在其他应用里使用划词与截图翻译").font(.system(size: 13, weight: .semibold))
+                    Text("拖选或双击任意文字后，旁边会出现「翻译 / 复制 / 保存」快捷工具栏；也可以直接按 ⌃⌥T 翻译选区，或按 ⌥S 框选截图翻译。")
                         .font(.system(size: 12)).foregroundStyle(Palette.secondary).lineSpacing(4)
-                    Text("应用未开放选区时：复制文字 → 菜单栏“翻译剪贴板”。")
+                    Text("支持的浏览器、编辑器和 PDF 均可直接划词，无需右键寻找菜单。")
                         .font(.system(size: 11)).foregroundStyle(Palette.secondary)
                 }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
@@ -500,7 +517,20 @@ struct SettingsView: View {
                 cardTitle("触发与识别")
                 toggleRow("cursorarrow.rays", "悬停翻译", "停留后在原文下显示一行译文。", $model.hoverEnabled)
                 Divider().padding(.vertical, 14)
+                toggleRow("text.cursor", "划词快捷工具栏", "选中文字后在旁显示「翻译 / 复制 / 保存」图标。", $model.selectionToolbarEnabled)
+                Divider().padding(.vertical, 14)
                 toggleRow("text.viewfinder", "允许本机 OCR 补充识别", "需要屏幕录制权限；识别范围限于鼠标附近。", $model.ocrEnabled)
+                Divider().padding(.vertical, 14)
+                row("keyboard", "全局快捷键", "无论当前在哪个应用，都可直接触发选区翻译或截图翻译。") {
+                    HStack(spacing: 8) {
+                        Text("⌃⌥T 译选区").font(.system(size: 11, weight: .medium, design: .rounded))
+                            .padding(.horizontal, 9).padding(.vertical, 4)
+                            .background(Palette.mint).foregroundStyle(Palette.green).clipShape(Capsule())
+                        Text("⌥S 截图翻译").font(.system(size: 11, weight: .medium, design: .rounded))
+                            .padding(.horizontal, 9).padding(.vertical, 4)
+                            .background(Palette.mint).foregroundStyle(Palette.green).clipShape(Capsule())
+                    }
+                }
                 Divider().padding(.vertical, 14)
                 row("timer", "悬停等待", "鼠标停留多久后显示译文。") {
                     slider($model.delay, 0.3...1.5, 0.1, "\(Int((model.delay * 1000).rounded())) ms")
@@ -518,7 +548,32 @@ struct SettingsView: View {
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 140)
                 }
             }
-            Text("不自动读取剪贴板，不记录翻译历史，截图仅在本机识别。使用 Apple 离线语言包时全程离线；选用 AI 服务时仅将待翻译文字发送至所选服务。关闭窗口后仍可从菜单栏使用；退出可按 ⌘Q。")
+            Panel {
+                cardTitle("摘录保存")
+                row("bookmark", "本地 Markdown 文件", "点击「保存」时同步追加到该文件；可指向 Obsidian 笔记库或任意文件夹。") {
+                    HStack(spacing: 8) {
+                        Button("选择位置…") { model.chooseSnippetsMarkdownLocation() }.buttonStyle(SoftButton())
+                        Button("在访达中显示") { model.revealSnippetsMarkdownFile() }.buttonStyle(SoftButton())
+                    }
+                }
+                HStack(spacing: 10) {
+                    Text(model.snippetsMarkdownPath)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(Palette.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                    Spacer()
+                    if model.snippetsMarkdownPath != SnippetStore.defaultMarkdownURL.path {
+                        Button("恢复默认") { model.resetSnippetsMarkdownPath() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Palette.green)
+                    }
+                }
+                .padding(.top, 10).padding(.leading, 45)
+            }
+            Text("不自动监视剪贴板，不记录浏览历史，截图仅在本机识别；仅主动点击「保存」的摘录会写入本地摘录本与 Markdown 文件。使用 Apple 离线语言包时全程离线；选用 AI 服务时仅将待翻译文字发送至所选服务。关闭窗口后仍可从菜单栏使用；退出可按 ⌘Q。")
                 .font(.system(size: 11)).foregroundStyle(Palette.secondary).lineSpacing(4)
         }.onAppear { model.refreshPermissions(); Task { await model.refreshLanguage() } }
     }
@@ -647,7 +702,7 @@ struct DropdownMenu: View {
     }
 }
 
-private enum MistCardPalette {
+enum MistCardPalette {
     static let ink = Color(red: 0.13, green: 0.16, blue: 0.14)
     static let secondary = Color(red: 0.47, green: 0.51, blue: 0.48)
     static let accent = Color(red: 0.20, green: 0.40, blue: 0.31)
@@ -666,13 +721,24 @@ struct TranslationCard: View {
                 languageMenu(source: false)
                 Spacer(minLength: 4)
                 HStack(spacing: 1) {
-                    if model.method == "截图 OCR" {
+                    if model.canToggleRegionMerge {
+                        tool(model.regionMergeLines ? "text.alignleft" : "list.bullet",
+                             help: model.regionMergeLines ? "已合并段落换行（点击保留原换行）" : "已保留原换行（点击合并段落）",
+                             active: model.regionMergeLines) {
+                            model.toggleRegionMerge()
+                        }
+                    }
+                    if model.method == "截图 OCR" && !model.recognizingRegion {
                         tool(model.copiedSource ? "checkmark" : "doc.on.clipboard",
                              help: model.copiedSource ? "已复制提取原文" : "复制提取的原文",
                              active: model.copiedSource) {
                             model.copySource()
                         }
                     }
+                    tool(model.savedCurrent ? "bookmark.fill" : "bookmark",
+                         help: model.savedCurrent ? "已保存到摘录本" : "保存到摘录本",
+                         active: model.savedCurrent) { model.saveCurrentCard() }
+                        .disabled(model.recognizingRegion || TextLogic.clean(model.source).isEmpty)
                     tool(model.pinned ? "pin.fill" : "pin", help: model.pinned ? "取消固定" : "固定浮窗",
                          active: model.pinned) { model.pinned.toggle() }
                     tool(model.copied ? "checkmark" : "doc.on.doc", help: model.copied ? "已复制" : "复制译文",
@@ -703,7 +769,8 @@ struct TranslationCard: View {
                 if model.phase == .loading || model.phase == .idle {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.mini)
-                        Text("正在翻译…").font(.system(size: 12)).foregroundStyle(MistCardPalette.secondary)
+                        Text(model.recognizingRegion ? "正在识别截图文字…" : "正在翻译…")
+                            .font(.system(size: 12)).foregroundStyle(MistCardPalette.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ScrollView {

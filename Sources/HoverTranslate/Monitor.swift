@@ -8,9 +8,22 @@ final class HoverMonitor {
         let demo: Bool
     }
 
+    struct SelectionToolbarState {
+        let pid: pid_t
+        let appName: String?
+        let anchor: CGRect
+        let pointer: CGPoint
+        let preloaded: SelectedCapture?
+        let createdAt: Date
+    }
+
+    enum ToolbarAction { case translate, copy, save }
+
     let model: AppModel
     var visibleCardFrame: (() -> CGRect?)?
+    var visibleToolbarFrame: (() -> CGRect?)?
     private var candidate: Candidate?
+    private var toolbarState: SelectionToolbarState?
     private var outsideSince: Date?
     nonisolated(unsafe) private var timer: Timer?
     nonisolated(unsafe) private var globalEvents: Any?
@@ -20,11 +33,13 @@ final class HoverMonitor {
     private var attempted = false
     private var captureTask: Task<Void, Never>?
     private var selectionTask: Task<Void, Never>?
+    private var toolbarTask: Task<Void, Never>?
     private var previousEnabled = false
     private var revision = 0
     private var lastPermissionRefresh = Date.distantPast
     private var previousCaptureAccess = ""
     private var mouseDownPoint: CGPoint?
+    private var mouseDownWindowFrame: CGRect?
     private var enabledSubscription: AnyCancellable?
 
     init(model: AppModel) { self.model = model }
@@ -53,12 +68,14 @@ final class HoverMonitor {
             let extending = event.modifierFlags.contains(.shift)
             Task { @MainActor in
                 guard let self else { return }
-                // The app's own normal paste emits key events in the destination.
+                // The app's own normal paste or transient copy emits key events in the destination.
                 if self.model.isReplacing { return }
-                let active = self.model.enabled || self.model.isPresenting || self.candidate != nil || self.visibleCardFrame?() != nil
+                let active = self.model.enabled || self.model.isPresenting || self.candidate != nil
+                    || self.toolbarState != nil || self.visibleCardFrame?() != nil
                 guard active else { return }
                 if type == .keyDown {
                     if keyCode == 53 { self.selectionTask?.cancel() }
+                    self.clearToolbar()
                     if self.model.isPresenting || self.candidate != nil {
                         self.model.dismiss(force: keyCode == 53)
                     }
@@ -66,10 +83,48 @@ final class HoverMonitor {
                     self.attempted = true
                     return
                 }
-                if type == .leftMouseDown { self.mouseDownPoint = location }
+                if type == .leftMouseDown {
+                    self.mouseDownPoint = location
+                    if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+                        self.mouseDownWindowFrame = self.frontmostWindowFrame(pid: pid)
+                    } else {
+                        self.mouseDownWindowFrame = nil
+                    }
+                    self.clearToolbar()
+                    self.selectionTask?.cancel()
+                    if self.model.isPresenting || self.candidate != nil {
+                        self.model.dismiss()
+                    }
+                    self.resetMotion(at: location)
+                    return
+                }
                 let selected = type == .leftMouseUp && TextLogic.isSelectionGesture(
                     from: self.mouseDownPoint, to: location, clickCount: clickCount, extending: extending)
+                let windowMoved: Bool
+                if type == .leftMouseUp, let before = self.mouseDownWindowFrame,
+                   let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                   let after = self.frontmostWindowFrame(pid: pid) {
+                    windowMoved = abs(before.minX - after.minX) > 2 || abs(before.minY - after.minY) > 2
+                        || abs(before.width - after.width) > 2 || abs(before.height - after.height) > 2
+                } else {
+                    windowMoved = false
+                }
+                if type == .leftMouseUp {
+                    self.mouseDownPoint = nil
+                    self.mouseDownWindowFrame = nil
+                }
                 self.selectionTask?.cancel()
+                if selected && !windowMoved && self.model.enabled && self.model.selectionToolbarEnabled
+                    && !self.model.capturingRegion && !self.model.pinned {
+                    if self.model.isPresenting || self.candidate != nil {
+                        self.model.dismiss()
+                    }
+                    self.resetMotion(at: location)
+                    self.attempted = true
+                    self.scheduleSelectionToolbar(at: location)
+                    return
+                }
+                self.clearToolbar()
                 if self.model.isPresenting || self.candidate != nil {
                     self.model.dismiss()
                 }
@@ -80,6 +135,10 @@ final class HoverMonitor {
         localEvents = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown]) { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown && event.keyCode == 53 {
+                if self.toolbarState != nil {
+                    self.clearToolbar()
+                    return nil
+                }
                 if self.model.isPresenting || self.candidate != nil {
                     self.model.dismiss(force: true)
                     return nil
@@ -87,7 +146,10 @@ final class HoverMonitor {
                 return event
             }
             if event.type == .scrollWheel || event.type == .leftMouseDown {
-                if (self.model.isPresenting || self.candidate != nil) && self.model.pointerInCard?() != true {
+                if self.toolbarState != nil && self.model.pointerInToolbar?() != true {
+                    self.clearToolbar()
+                }
+                if (self.model.isPresenting || self.candidate != nil) && self.model.pointerInCard?() != true && self.model.pointerInToolbar?() != true {
                     self.model.dismiss()
                 }
             }
@@ -96,8 +158,8 @@ final class HoverMonitor {
     }
 
     /// The 25 Hz pointer poll is needed only while translation is on or a
-    /// badge/card is on screen; a paused app must not keep waking the CPU.
-    var pollingNeeded: Bool { model.enabled || candidate != nil || visibleCardFrame?() != nil }
+    /// toolbar/card is on screen; a paused app must not keep waking the CPU.
+    var pollingNeeded: Bool { model.enabled || candidate != nil || toolbarState != nil || visibleCardFrame?() != nil }
     var isPolling: Bool { timer != nil }
 
     func startPolling() {
@@ -122,8 +184,115 @@ final class HoverMonitor {
         outsideSince = nil
     }
 
+    func clearToolbar() {
+        toolbarTask?.cancel()
+        toolbarTask = nil
+        if toolbarState != nil {
+            toolbarState = nil
+            model.hideSelectionToolbar?()
+        }
+    }
+
+    private func scheduleSelectionToolbar(at pointer: CGPoint) {
+        toolbarTask?.cancel()
+        toolbarTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard let self, !Task.isCancelled else { return }
+            guard NSEvent.pressedMouseButtons == 0,
+                  self.model.enabled, self.model.selectionToolbarEnabled,
+                  !self.model.pinned, !self.model.capturingRegion else { return }
+            guard let front = NSWorkspace.shared.frontmostApplication,
+                  front.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+            let pid = front.processIdentifier
+            let quartz = TextLogic.quartzPoint(pointer, desktopTop: self.desktopTop)
+            let context = TextCapture.selectionContext(at: quartz, pid: pid)
+            guard context.allowed, !context.protected else { return }
+
+            var preloaded: SelectedCapture?
+            if self.model.accessibility {
+                do {
+                    preloaded = try await TextCapture.selected(pid: pid, fallbackPoint: quartz)
+                } catch CaptureError.protectedText {
+                    return
+                } catch {
+                    preloaded = nil
+                }
+            }
+            guard !Task.isCancelled,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+                  self.model.enabled, self.model.selectionToolbarEnabled,
+                  !self.model.pinned, !self.model.capturingRegion else { return }
+
+            let anchor: CGRect
+            if let preloaded, !preloaded.text.bounds.isEmpty {
+                anchor = TextLogic.cocoaRect(preloaded.text.bounds, desktopTop: self.desktopTop)
+            } else {
+                anchor = CGRect(origin: pointer, size: CGSize(width: 1, height: 1))
+            }
+            self.toolbarState = SelectionToolbarState(
+                pid: pid,
+                appName: front.localizedName,
+                anchor: anchor,
+                pointer: pointer,
+                preloaded: preloaded,
+                createdAt: Date()
+            )
+            self.startPolling()
+            self.model.showSelectionToolbar?(CGRect(origin: pointer, size: CGSize(width: 1, height: 1)))
+        }
+    }
+
+    func performToolbarAction(_ action: ToolbarAction) {
+        guard let state = toolbarState else { return }
+        clearToolbar()
+        selectionTask?.cancel()
+        captureTask?.cancel()
+        revision += 1
+        attempted = true
+        selectionTask = Task { [weak self] in
+            guard let self else { return }
+            var text: String?
+            var replacement: ReplacementTarget?
+            var anchor = state.anchor
+            if let preloaded = state.preloaded {
+                text = preloaded.text.text
+                replacement = preloaded.replacement
+            } else {
+                // Tier 2 fallback: transiently copy selection from Chromium/Electron/PDF/Terminal apps.
+                text = await TextCapture.copySelectionViaClipboard(pid: state.pid, keepOnClipboard: action == .copy)
+                anchor = CGRect(origin: state.pointer, size: CGSize(width: 8, height: 18))
+            }
+            guard !Task.isCancelled else { return }
+            guard let resolved = text, !resolved.isEmpty else {
+                self.model.flashToast("未检测到选中文字", at: state.pointer)
+                return
+            }
+            switch action {
+            case .translate:
+                self.model.present(
+                    CapturedText(text: resolved, bounds: .zero, method: "选中文字"),
+                    cocoaAnchor: anchor,
+                    selection: true,
+                    replacement: replacement,
+                    appName: state.appName
+                )
+            case .copy:
+                if state.preloaded != nil {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(resolved, forType: .string)
+                }
+                self.model.flashToast("已复制", at: state.pointer)
+            case .save:
+                let lang = TextLogic.language(of: resolved, japaneseKanji: self.model.japaneseKanji)
+                self.model.saveSnippet(text: resolved, sourceLanguage: lang, appName: state.appName)
+                self.model.flashToast("已保存到摘录本", at: state.pointer)
+            }
+        }
+    }
+
     func stage(_ capture: CapturedText, sourceRect: CGRect, pointer: CGPoint, demo: Bool = false) {
         guard !model.pinned else { return }
+        clearToolbar()
         let vicinity = CGRect(x: pointer.x - 24, y: pointer.y - 8, width: 48, height: 16)
         let region = sourceRect.contains(pointer) && (demo || sourceRect.height <= 44) ? sourceRect : vicinity
         candidate = Candidate(region: region.insetBy(dx: -3, dy: -2), demo: demo)
@@ -156,6 +325,20 @@ final class HoverMonitor {
         return false
     }
 
+    private func retainToolbar(at point: CGPoint, now: Date) -> Bool {
+        guard let state = toolbarState else { return false }
+        if let frame = visibleToolbarFrame?(), frame.insetBy(dx: -16, dy: -16).contains(point) {
+            return true
+        }
+        let distance = hypot(point.x - state.pointer.x, point.y - state.pointer.y)
+        if distance <= 200 && now.timeIntervalSince(state.createdAt) < 6 {
+            return true
+        }
+        clearToolbar()
+        resetMotion(at: point)
+        return false
+    }
+
     private func tick() {
         let now = Date()
         let missingPermission = model.enabled && (!model.accessibility || (model.ocrEnabled && !model.screenPermission))
@@ -178,6 +361,7 @@ final class HoverMonitor {
         // A deliberate selection is an action toolbar, not a hover preview.
         // Keep it reachable across any gap until an outside click/scroll or close.
         if model.capturingRegion { return }
+        if retainToolbar(at: point, now: now) { return }
         if retainSelection() { return }
         if retainCandidate(at: point, now: now) { return }
         guard model.enabled, !model.pinned else { return }
@@ -232,6 +416,19 @@ final class HoverMonitor {
         model.selectionVisible && visibleCardFrame?() != nil
     }
 
+    private func frontmostWindowFrame(pid: pid_t) -> CGRect? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        for window in windows {
+            guard window[kCGWindowOwnerPID as String] as? pid_t == pid,
+                  (window[kCGWindowLayer as String] as? Int ?? 0) == 0,
+                  let raw = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: raw as CFDictionary),
+                  rect.width > 50, rect.height > 50 else { continue }
+            return rect
+        }
+        return nil
+    }
+
     private func topWindowIsOurs(at quartz: CGPoint) -> Bool {
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
         for window in windows {
@@ -244,15 +441,31 @@ final class HoverMonitor {
     }
 
     func readSelection() {
-        guard let front = NSWorkspace.shared.frontmostApplication,
-              front.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        clearToolbar()
+        guard let front = NSWorkspace.shared.frontmostApplication else { return }
+        if front.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            if let tv = NSApp.keyWindow?.firstResponder as? NSTextView {
+                let range = tv.selectedRange()
+                if range.length > 0, range.location != NSNotFound {
+                    let text = (tv.string as NSString).substring(with: range)
+                    if !TextLogic.clean(text).isEmpty {
+                        model.presentSelection(text, appName: "浮译")
+                        return
+                    }
+                }
+            }
+            model.flashToast("未检测到选中文字")
+            return
+        }
         selectionTask?.cancel()
         captureTask?.cancel()
         revision += 1
         attempted = true
         model.dismiss(force: true)
         let pid = front.processIdentifier
-        let point = TextLogic.quartzPoint(NSEvent.mouseLocation, desktopTop: desktopTop)
+        let appName = front.localizedName
+        let mouse = NSEvent.mouseLocation
+        let point = TextLogic.quartzPoint(mouse, desktopTop: desktopTop)
         selectionTask = Task { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled else { return }
@@ -266,15 +479,33 @@ final class HoverMonitor {
                 let capture = try await TextCapture.selected(pid: pid, fallbackPoint: point)
                 guard !Task.isCancelled, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
                 let anchor = TextLogic.cocoaRect(capture.text.bounds, desktopTop: desktopTop)
-                model.present(capture.text, cocoaAnchor: anchor, selection: true, replacement: capture.replacement)
+                model.present(capture.text, cocoaAnchor: anchor, selection: true, replacement: capture.replacement, appName: appName)
+            } catch CaptureError.protectedText {
+                guard !Task.isCancelled else { return }
+                attempted = false
+                stableSince = Date()
+                model.flashToast("此处是受保护的输入区域，已跳过", at: mouse)
+            } catch CaptureError.nothingSelected {
+                // Tier 2 fallback: transiently copy from Chromium/Electron/PDF/Terminal apps.
+                if let copied = await TextCapture.copySelectionViaClipboard(pid: pid, keepOnClipboard: false),
+                   !Task.isCancelled {
+                    model.present(
+                        CapturedText(text: copied, bounds: .zero, method: "选中文字"),
+                        cocoaAnchor: CGRect(origin: mouse, size: CGSize(width: 8, height: 18)),
+                        selection: true,
+                        appName: appName
+                    )
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                attempted = false
+                stableSince = Date()
+                model.flashToast("未检测到选中文字", at: mouse)
             } catch {
                 guard !Task.isCancelled else { return }
                 attempted = false
                 stableSince = Date()
-                model.status = error.localizedDescription
-                if case CaptureError.nothingSelected = error { return }
-                if case CaptureError.protectedText = error { return }
-                model.showWindow?()
+                model.flashToast(error.localizedDescription, at: mouse)
             }
         }
     }

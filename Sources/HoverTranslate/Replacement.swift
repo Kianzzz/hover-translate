@@ -91,19 +91,23 @@ final class PasteboardLease {
     private let board: NSPasteboard
     private let items: [NSPasteboardItem]
     private let changeCount: Int
-    init(text: String, board: NSPasteboard = .general) throws {
-        self.board = board
+    static func snapshot(_ board: NSPasteboard) -> [NSPasteboardItem] {
         let skipTypes = Set<NSPasteboard.PasteboardType>([
             NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type"),
             NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")
         ])
-        items = (board.pasteboardItems ?? []).compactMap { original in
+        return (board.pasteboardItems ?? []).compactMap { original in
             let copy = NSPasteboardItem()
             for type in original.types where !skipTypes.contains(type) {
                 if let data = original.data(forType: type) { copy.setData(data, forType: type) }
             }
             return copy.types.isEmpty ? nil : copy
         }
+    }
+
+    init(text: String, board: NSPasteboard = .general) throws {
+        self.board = board
+        items = Self.snapshot(board)
         let lease = NSPasteboardItem()
         lease.setString(text, forType: .string)
         for marker in Self.markerTypes { lease.setData(Data(), forType: marker) }
