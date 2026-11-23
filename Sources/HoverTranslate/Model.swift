@@ -38,11 +38,23 @@ final class LocalTranslator {
     private var cache: [String: String] = [:]
     private var keys: [String] = []
 
+    func cached(provider: AIProvider, text: String, from source: String, to target: String) -> String? {
+        cache[provider.rawValue + "|" + source + "|" + target + "|" + text]
+    }
+
+    func store(_ output: String, provider: AIProvider, text: String, from source: String, to target: String) {
+        let key = provider.rawValue + "|" + source + "|" + target + "|" + text
+        if cache[key] == nil {
+            if keys.count >= 100, let oldest = keys.first { cache.removeValue(forKey: oldest); keys.removeFirst() }
+            keys.append(key)
+        }
+        cache[key] = output
+    }
+
     func translate(_ text: String, from source: String, to target: String) async throws -> String {
         guard text.count <= 8000 else { throw TranslationIssue.tooLong }
         if source == target { return text }
-        let key = source + "|" + target + "|" + text
-        if let cached = cache[key] { return cached }
+        if let cached = cached(provider: .apple, text: text, from: source, to: target) { return cached }
         let from = Locale.Language(identifier: source)
         let to = Locale.Language(identifier: target)
         let status = await TranslationRuntime.availability().status(from: from, to: to)
@@ -56,9 +68,7 @@ final class LocalTranslator {
             session.cancel()
         }
         try Task.checkCancellation()
-        if keys.count >= 100, let oldest = keys.first { cache.removeValue(forKey: oldest); keys.removeFirst() }
-        cache[key] = response.targetText
-        keys.append(key)
+        store(response.targetText, provider: .apple, text: text, from: source, to: target)
         return response.targetText
     }
 }
@@ -70,13 +80,26 @@ final class AppModel: ObservableObject {
         didSet { defaults?.set(provider.rawValue, forKey: "translationProvider") }
     }
     @Published var availableProviders: [AIProvider] = [.apple]
+    @Published var checkingProviders = false
+    @Published var providerCheckMessage = ""
     var capturingRegion = false
-    func refreshProviders() async {
+    func refreshProviders(interactive: Bool = false) async {
+        guard !checkingProviders else { return }
+        checkingProviders = true
+        if interactive { providerCheckMessage = "正在检测本机 AI 登录状态…" }
+        defer { checkingProviders = false }
+        async let codexReady = AIProvider.codex.authenticated()
+        async let claudeReady = AIProvider.claude.authenticated()
         var providers = [AIProvider.apple]
-        for p in [AIProvider.codex, .claude] {
-            if await p.authenticated() { providers.append(p) }
+        if await codexReady { providers.append(.codex) }
+        if await claudeReady { providers.append(.claude) }
+        if availableProviders != providers { availableProviders = providers }
+        if interactive {
+            let detected = providers.filter { $0 != .apple }.map(\.rawValue)
+            providerCheckMessage = detected.isEmpty
+                ? "未检测到已登录的 Codex 或 Claude 客户端。"
+                : "已检测到可用服务：" + detected.joined(separator: "、")
         }
-        availableProviders = providers
     }
     @Published var page = "home"
     @Published var enabled = false
@@ -107,6 +130,7 @@ final class AppModel: ObservableObject {
     /// Pack status for each source language into the current target.
     @Published var packStatus: [String: LanguageAvailability.Status] = [:]
     @Published var preparingSource: String?
+    @Published var preparingTarget: String?
     /// The language currently shown in the settings pack menu.
     @Published var selectedPack = "ja"
     @Published var source = ""
@@ -116,6 +140,7 @@ final class AppModel: ObservableObject {
     @Published var phase: CardPhase = .idle
     @Published var pinned = false
     @Published var copied = false
+    @Published var copiedSource = false
     @Published var status = "准备就绪"
     @Published var manualText = "Good design makes complex things feel simple."
     @Published private(set) var isReplacing = false
@@ -139,13 +164,14 @@ final class AppModel: ObservableObject {
     var releasePanelFocus: (() -> Void)?
     var anchor = CGRect.zero
     private(set) var selectionVisible = false
+    private(set) var isPresenting = false
 
     var hasReplacementTarget: Bool { selectionVisible && replacementTarget != nil }
     var showsReplacementControls: Bool { hasReplacementTarget || !replacementMessage.isEmpty }
     var canReplaceSelection: Bool {
         guard hasReplacementTarget, !isReplacing, phase == .result,
               let replacementTarget, !result.isEmpty else { return false }
-        return result != TextLogic.clean(replacementTarget.edit.selected)
+        return TextLogic.clean(result) != TextLogic.clean(replacementTarget.edit.selected)
     }
 
     func replaceSelection() {
@@ -154,7 +180,7 @@ final class AppModel: ObservableObject {
         let id = UUID()
         replacementID = id
         isReplacing = true
-        replacementMessage = ""
+        if !replacementMessage.isEmpty { replacementMessage = "" }
         replacementTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -186,9 +212,9 @@ final class AppModel: ObservableObject {
         replacementTask?.cancel()
         replacementTask = nil
         replacementID = UUID()
-        replacementTarget = nil
-        isReplacing = false
-        replacementMessage = ""
+        if replacementTarget != nil { replacementTarget = nil }
+        if isReplacing { isReplacing = false }
+        if !replacementMessage.isEmpty { replacementMessage = "" }
     }
 
     init(checkPermissions: Bool = true) {
@@ -221,7 +247,13 @@ final class AppModel: ObservableObject {
     }
 
     var subtitleText: String { phase == .loading ? "正在翻译…" : result.components(separatedBy: .newlines).joined(separator: " ") }
-    var cardWidth: CGFloat { CardLayout.width(source: source, result: phase == .result ? result : "") }
+    var cardWidth: CGFloat {
+        let headerLabels = TextLogic.displayName(sourceLanguage) + " → " + TextLogic.displayName(target)
+        let labelWidth = ceil((headerLabels as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width)
+        let buttonsWidth: CGFloat = method == "截图 OCR" ? 94 : 70
+        let headerMinimum = max(CardLayout.minimumWidth, ceil(14 + 17 + 18 + labelWidth + 24 + buttonsWidth + 8))
+        return CardLayout.width(source: source, result: phase == .result ? result : "", minimumWidth: headerMinimum)
+    }
     var cardSourceHeight: CGFloat { CardLayout.sourceHeight(source: source, width: cardWidth) }
     var cardBodyHeight: CGFloat {
         CardLayout.bodyHeight(result: result, width: cardWidth, loading: phase == .loading,
@@ -251,8 +283,9 @@ final class AppModel: ObservableObject {
             packs[language.id] = await availability.status(from: Locale.Language(identifier: language.id), to: Locale.Language(identifier: target))
         }
         guard target == targetLanguage else { return }
-        languageReady = ["ja", "ko", "en"].filter { !TextLogic.sameLanguage($0, target) }.allSatisfy { packs[$0] == .installed }
-        packStatus = packs
+        let ready = packs.values.contains(.installed)
+        if languageReady != ready { languageReady = ready }
+        if packStatus != packs { packStatus = packs }
     }
 
     /// System Settings shows real download progress; the in-app sheet does not.
@@ -261,7 +294,7 @@ final class AppModel: ObservableObject {
     }
 
     func requestAccessibility() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
         openPrivacy("Accessibility")
     }
@@ -291,10 +324,13 @@ final class AppModel: ObservableObject {
     }
 
     func prepareLanguage(source: String? = nil, target: String? = nil) {
+        let src = source ?? preparationSource
+        let dst = target ?? targetLanguage
         preparing = true
-        preparingSource = source ?? preparationSource
-        preparationMessage = "请在弹窗中确认下载，期间保持此窗口打开。弹窗长时间不动时可关掉，改用“在系统设置中下载”，那里能看到进度。"
-        let config = TranslationRuntime.configuration(source: source ?? preparationSource, target: target ?? targetLanguage)
+        preparingSource = src
+        preparingTarget = dst
+        preparationMessage = "请在弹窗中确认下载（\(TextLogic.displayName(src)) → \(TextLogic.displayName(dst))），期间保持此窗口打开。弹窗长时间不动时可关掉，改用“在系统设置中下载”，那里能看到进度。"
+        let config = TranslationRuntime.configuration(source: src, target: dst)
         if preparationConfig == config { preparationConfig?.invalidate() } else { preparationConfig = config }
     }
 
@@ -334,21 +370,27 @@ final class AppModel: ObservableObject {
         guard !pinned else { return }
         clearReplacement()
         if selection { clearHover?() }
+        isPresenting = true
         selectionVisible = selection
-        replacementTarget = selection ? replacement : nil
+        let nextReplacement = selection ? replacement : nil
+        if (replacementTarget == nil) != (nextReplacement == nil) || nextReplacement != nil {
+            replacementTarget = nextReplacement
+        }
         translationTask?.cancel()
+        translationTask = nil
         requestID = UUID()
         source = capture.text
         method = capture.method
         anchor = cocoaAnchor
-        result = ""
-        copied = false
-        pinned = false
+        copiedSource = false
+        if pinned { pinned = false }
         sourceLanguage = TextLogic.language(of: capture.text, japaneseKanji: japaneseKanji)
-        target = TextLogic.target(for: sourceLanguage, preferred: targetLanguage, native: nativeLanguage)
+        let resolvedTarget = TextLogic.target(for: sourceLanguage, preferred: targetLanguage, native: nativeLanguage)
+        target = resolvedTarget
+        result = ""
         phase = .loading
         showCard?(anchor)
-        translate(to: target)
+        translate(to: resolvedTarget)
     }
 
     func translate(to language: String) {
@@ -356,16 +398,28 @@ final class AppModel: ObservableObject {
         translationTask?.cancel()
         let id = UUID()
         requestID = id
-        target = language
-        copied = false
-        missingPack = nil
-        let input = source, from = sourceLanguage
-        result = ""
-        phase = .loading
+        if target != language { target = language }
+        if copied { copied = false }
+        if missingPack != nil { missingPack = nil }
+        let input = source, from = sourceLanguage, activeProvider = provider
+        if let cached = translator.cached(provider: activeProvider, text: input, from: from, to: language) {
+            result = cached
+            phase = .result
+            status = "翻译完成"
+            return
+        }
+        if !result.isEmpty { result = "" }
+        if phase != .loading { phase = .loading }
         translationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let output = try await provider == .apple ? translator.translate(input, from: from, to: language) : provider.translate(input, from: from, to: language)
+                let output: String
+                if activeProvider == .apple {
+                    output = try await translator.translate(input, from: from, to: language)
+                } else {
+                    output = try await activeProvider.translate(input, from: from, to: language)
+                    translator.store(output, provider: activeProvider, text: input, from: from, to: language)
+                }
                 guard !Task.isCancelled, requestID == id else { return }
                 result = output; phase = .result; status = "翻译完成"
             } catch is CancellationError {
@@ -380,11 +434,21 @@ final class AppModel: ObservableObject {
 
     func dismiss(force: Bool = false) {
         guard force || !pinned else { return }
+        let hasState = isPresenting || selectionVisible || translationTask != nil
+            || replacementTarget != nil || isReplacing || !replacementMessage.isEmpty
+            || pinned || missingPack != nil
+        guard hasState else {
+            clearHover?()
+            return
+        }
         clearReplacement()
+        isPresenting = false
         selectionVisible = false
         translationTask?.cancel()
+        translationTask = nil
         requestID = UUID()
-        pinned = false
+        if pinned { pinned = false }
+        if missingPack != nil { missingPack = nil }
         hideCard?()
         clearHover?()
     }
@@ -396,18 +460,28 @@ final class AppModel: ObservableObject {
         copied = true
     }
 
+    func copySource() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(source, forType: .string)
+        copiedSource = true
+        status = "已复制提取的原文"
+    }
+
     func clipboard() {
         guard let text = NSPasteboard.general.string(forType: .string), !TextLogic.clean(text).isEmpty else {
             status = "剪贴板中没有文字"; showWindow?(); return
         }
+        dismiss(force: true)
         let mouse = NSEvent.mouseLocation
         present(CapturedText(text: TextLogic.clean(text), bounds: .zero, method: "剪贴板 · 手动触发"),
                 cocoaAnchor: CGRect(origin: mouse, size: CGSize(width: 8, height: 18)), selection: true)
     }
 
     func presentSelection(_ text: String) {
+        let cleaned = TextLogic.clean(text)
+        guard !cleaned.isEmpty else { return }
         dismiss(force: true)
-        present(CapturedText(text: text, bounds: .zero, method: "右键选区"),
+        present(CapturedText(text: cleaned, bounds: .zero, method: "右键选区"),
                 cocoaAnchor: CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 1, height: 1)), selection: true)
     }
 
@@ -426,10 +500,15 @@ final class AppModel: ObservableObject {
     func downloadMissingPack() {
         guard let pack = missingPack else { return }
         dismiss(force: true)
-        if pack.target != targetLanguage { targetLanguage = pack.target }
         settings()
-        Task { await refreshLanguage() }
-        preparationMessage = "\(TextLogic.displayName(pack.source)) → \(TextLogic.displayName(pack.target)) 需要下载：点下方对应语言的“下载”，或在系统设置中下载。"
+        if TextLogic.sameLanguage(pack.target, targetLanguage) {
+            selectedPack = pack.source
+            Task { await refreshLanguage() }
+            preparationMessage = "\(TextLogic.displayName(pack.source)) → \(TextLogic.displayName(pack.target)) 需要下载：点下方“下载”，或在系统设置中下载。"
+        } else {
+            // Do not overwrite the user's preferred targetLanguage; prepare the exact missing pair directly.
+            prepareLanguage(source: pack.source, target: pack.target)
+        }
     }
 
     func preview(_ english: String, bounds: CGRect) {

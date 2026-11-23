@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var subscriptions = Set<AnyCancellable>()
     var hotKey: EventHotKeyRef?
     var hotKeyHandler: EventHandlerRef?
+    private var panelDraggedByUser = false
+    private var settingPanelFrame = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -149,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
+        panel.delegate = self
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         let glass = NSVisualEffectView(frame: CGRect(origin: .zero, size: panel.frame.size))
         glass.material = .popover
@@ -193,21 +196,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return container
     }
 
+    private func screen(containing point: CGPoint) -> NSScreen? {
+        NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main ?? NSScreen.screens.first
+    }
+
+    private func setPanelFrame(_ frame: CGRect) {
+        settingPanelFrame = true
+        panel.setFrame(frame, display: true)
+        settingPanelFrame = false
+    }
+
     func showCard(_ anchor: CGRect) {
         if !model.selectionVisible {
             panel.orderOut(nil)
-            let screen = NSScreen.screens.first { $0.frame.contains(anchor.origin) } ?? NSScreen.main!
-            let width = min(screen.visibleFrame.width - 24, max(96, min(680, ceil((model.subtitleText as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + 28)))
+            panelDraggedByUser = false
+            guard let screen = screen(containing: anchor.origin) else { return }
+            let extra: CGFloat = model.phase == .failure ? 44 : 28
+            let width = min(screen.visibleFrame.width - 24, max(96, min(680, ceil((model.subtitleText as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + extra)))
             let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: width, height: 26), visible: screen.visibleFrame)
             subtitle.setFrame(frame, display: true)
             subtitle.orderFrontRegardless()
             return
         }
         subtitle.orderOut(nil)
+        panelDraggedByUser = false
         let height = model.cardHeight
-        let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: anchor.midX, y: anchor.midY)) } ?? NSScreen.main!
+        guard let screen = screen(containing: CGPoint(x: anchor.midX, y: anchor.midY)) else { return }
         let frame = TextLogic.panelFrame(anchor: anchor, size: CGSize(width: model.cardWidth, height: height), visible: screen.visibleFrame)
-        panel.setFrame(frame, display: true)
+        setPanelFrame(frame)
         panel.orderFrontRegardless()
         if model.method == "文字试用" { panel.makeKeyAndOrderFront(nil) }
     }
@@ -216,14 +232,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard panel.isVisible || subtitle.isVisible else { return }
         if model.selectionVisible {
             let old = panel.frame
-            let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: old.midX, y: old.midY)) } ?? NSScreen.main!
+            guard let screen = screen(containing: CGPoint(x: old.midX, y: old.midY)) else { return }
             let safe = screen.visibleFrame.insetBy(dx: 12, dy: 12)
-            let below = old.maxY <= model.anchor.minY
+            let below = panelDraggedByUser ? true : old.maxY <= model.anchor.minY
             let y = below ? old.maxY - model.cardHeight : old.minY
+            let clampedY = min(max(y, safe.minY), safe.maxY - model.cardHeight)
             let x = min(max(old.minX, safe.minX), safe.maxX - model.cardWidth)
-            let frame = CGRect(x: x, y: y, width: model.cardWidth, height: model.cardHeight)
-            if safe.contains(frame), !frame.intersects(model.anchor) {
-                panel.setFrame(frame, display: true)
+            let frame = CGRect(x: x, y: panelDraggedByUser ? clampedY : y, width: model.cardWidth, height: model.cardHeight)
+            if panelDraggedByUser || (safe.contains(frame) && !frame.intersects(model.anchor)) {
+                setPanelFrame(frame)
                 return
             }
         }
@@ -254,30 +271,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.menu = menu
     }
 
-    func createMainMenu() {
-        let main = NSMenu()
-        let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu(title: "浮译")
-        applicationMenu.addItem(item("打开浮译", #selector(openMain), ""))
-        applicationMenu.addItem(item("偏好设置…", #selector(settings), ","))
-        applicationMenu.addItem(.separator())
-        let hide = NSMenuItem(title: "隐藏浮译", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        hide.target = NSApp
-        applicationMenu.addItem(hide)
-        applicationMenu.addItem(.separator())
-        applicationMenu.addItem(item("退出浮译", #selector(quit), "q"))
-        applicationItem.submenu = applicationMenu
-        main.addItem(applicationItem)
-        let editItem = NSMenuItem()
-        let edit = NSMenu(title: "编辑")
-        for (title, selector, key) in [("剪切", "cut:", "x"), ("复制", "copy:", "c"), ("粘贴", "paste:", "v"), ("全选", "selectAll:", "a")] {
-            edit.addItem(NSMenuItem(title: title, action: NSSelectorFromString(selector), keyEquivalent: key))
-        }
-        editItem.submenu = edit
-        main.addItem(editItem)
-        NSApp.mainMenu = main
-    }
-
     func item(_ title: String, _ action: Selector, _ key: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self; return item
@@ -301,23 +294,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func toggle() { model.toggleEnabled() }
     @objc func selection() { monitor.readSelection() }
     @objc func translateSelection(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
-        guard let text = pasteboard.string(forType: .string), !TextLogic.clean(text).isEmpty else {
+        guard let raw = pasteboard.string(forType: .string), !TextLogic.clean(raw).isEmpty else {
             error.pointee = "选区没有可读取的文字。"; return
         }
-        model.presentSelection(text)
+        model.presentSelection(TextLogic.clean(raw))
     }
 
     @objc func screenshot() {
         guard !model.capturingRegion else { return }
         model.refreshPermissions()
-        guard model.screenPermission else { model.requestScreen(); return }
+        guard model.screenPermission else { model.requestScreen(); showMain(); return }
         model.dismiss(force: true)
         model.capturingRegion = true
         Task {
             defer { model.capturingRegion = false }
+            var dropPoint = NSEvent.mouseLocation
             do {
-                guard let text = try await RegionCapture.text() else { return }
-                model.present(CapturedText(text: text, bounds: .zero, method: "截图 OCR"), cocoaAnchor: CGRect(origin: NSEvent.mouseLocation, size: CGSize(width: 1, height: 1)), selection: true)
+                guard let text = try await RegionCapture.text(onCaptured: {
+                    await MainActor.run { dropPoint = NSEvent.mouseLocation }
+                }) else { return }
+                model.present(CapturedText(text: text, bounds: .zero, method: "截图 OCR"), cocoaAnchor: CGRect(origin: dropPoint, size: CGSize(width: 1, height: 1)), selection: true)
             } catch {
                 model.status = error.localizedDescription
                 showMain()
@@ -328,13 +324,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func settings() { model.settings() }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showMain() }
+        return true
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
+    }
     func applicationDidBecomeActive(_ notification: Notification) {
         model.continuePermissionSetup()
         // Packs downloaded in System Settings appear when the user comes back.
         Task { await model.refreshLanguage() }
     }
+    func windowDidMove(_ notification: Notification) {
+        guard let moved = notification.object as? NSWindow, moved === panel, !settingPanelFrame, panel.isVisible else { return }
+        panelDraggedByUser = true
+    }
     func windowWillClose(_ notification: Notification) {
-        DispatchQueue.main.async { [weak self] in self?.model.dismiss(force: true) }
+        guard let closed = notification.object as? NSWindow, closed === window else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.model.pinned else { return }
+            self.model.dismiss(force: true)
+        }
     }
 }
 
@@ -376,6 +388,10 @@ struct Entry {
                 DiagnosticCheck.require(updates == 2, "Permission changes must publish immediately")
                 model.applyPermissions(accessibility: true, screen: true)
                 DiagnosticCheck.require(updates == 2, "Repeated polling must not publish")
+                model.dismiss()
+                model.dismiss(force: true)
+                DiagnosticCheck.require(updates == 2, "Idle dismiss must never invalidate SwiftUI layout")
+                DiagnosticCheck.require(AIProvider.apple.binary == nil, "Apple offline provider must never resolve a CLI binary")
                 subscription.cancel()
                 let monitor = HoverMonitor(model: model)
                 let pointer = CGPoint(x: 150, y: 310)

@@ -25,6 +25,8 @@ enum TextLogic {
         return chinese[id] ?? Locale(identifier: "zh-Hans").localizedString(forIdentifier: id) ?? id
     }
 
+    private static let paragraphBreakRegex = try! NSRegularExpression(pattern: "\\n[ \\t\\r]*\\n|\\r[ \\t]*\\r")
+
     /// Script decides CJK; the statistical recognizer only chooses among the
     /// offered languages, and Latin text must be clearly non-English to switch.
     static func language(of text: String, japaneseKanji: Bool = false) -> String {
@@ -34,8 +36,8 @@ enum TextLogic {
         // Exclude ・ and ー: Chinese text uses them too.
         let kana = count([0x3040...0x309F, 0x30A0...0x30FA, 0x30FD...0x30FF, 0x31F0...0x31FF, 0xFF66...0xFF9F])
         let hangul = count([0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF])
-        let han = count([0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF])
-        let latin = count([0x41...0x5A, 0x61...0x7A, 0xC0...0x24F])
+        let han = count([0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF, 0x20000...0x2FA1F])
+        let latin = count([0x41...0x5A, 0x61...0x7A, 0xC0...0x24F, 0x1E00...0x1EFF])
         if kana > 0, kana >= hangul { return "ja" }
         if hangul > 0 { return "ko" }
         if han > 0, han * 2 > latin {
@@ -56,10 +58,14 @@ enum TextLogic {
         guard let (top, confidence) = recognizer.languageHypotheses(withMaximum: 3).max(by: { $0.value < $1.value }),
               let id = candidates[top] else { return "en" }
         let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
-        // Short UI labels and loanword-heavy phrases are mostly English in practice.
+        // Short ASCII UI labels are mostly English, while diacritics or very high confidence signal other Latin languages.
         if latin * 2 >= letters, top != .english {
             let words = text.split { !$0.isLetter && $0 != "'" && $0 != "-" }.count
-            return words >= 4 && confidence >= 0.8 ? id : "en"
+            let hasDiacritic = text.unicodeScalars.contains { (0xC0...0x24F).contains($0.value) || (0x1E00...0x1EFF).contains($0.value) }
+            if (words >= 4 && confidence >= 0.8) || (hasDiacritic && confidence >= 0.85) || (words >= 2 && confidence >= 0.96) {
+                return id
+            }
+            return "en"
         }
         return id
     }
@@ -97,8 +103,43 @@ enum TextLogic {
     static func isForeign(_ text: String, native: String, japaneseKanji: Bool = false) -> Bool {
         let source = language(of: text, japaneseKanji: japaneseKanji)
         guard !sameLanguage(source, native) else { return false }
-        if source == "ja" || source == "ko" { return text.contains(where: \.isLetter) }
-        return text.range(of: "\\p{L}{2,}", options: .regularExpression) != nil
+        if ["ja", "ko", "zh-Hans", "zh-Hant"].contains(source) { return text.contains(where: \.isLetter) }
+        var run = 0
+        for char in text {
+            if char.isLetter {
+                run += 1
+                if run >= 2 { return true }
+            } else {
+                run = 0
+            }
+        }
+        return false
+    }
+
+    /// Cheap check used to skip OCR on large pure-native static text blocks.
+    static func mayContainForeign(_ text: String, native: String, japaneseKanji: Bool = false) -> Bool {
+        if isForeign(text, native: native, japaneseKanji: japaneseKanji) { return true }
+        let nativeBase = baseLanguage(native)
+        if nativeBase == "zh" {
+            // Look for kana, hangul, or >= 2 consecutive non-Han letters.
+            var run = 0
+            for scalar in text.unicodeScalars {
+                let v = scalar.value
+                if (0x3040...0x309F).contains(v) || (0x30A0...0x30FA).contains(v) || (0x30FD...0x30FF).contains(v)
+                    || (0x1100...0x11FF).contains(v) || (0x3130...0x318F).contains(v) || (0xAC00...0xD7AF).contains(v) {
+                    return true
+                }
+                let isHan = (0x3400...0x4DBF).contains(v) || (0x4E00...0x9FFF).contains(v) || (0xF900...0xFAFF).contains(v) || (0x20000...0x2FA1F).contains(v)
+                if CharacterSet.letters.contains(scalar) && !isHan {
+                    run += 1
+                    if run >= 2 { return true }
+                } else {
+                    run = 0
+                }
+            }
+            return false
+        }
+        return true
     }
 
     /// Text already in the preferred language falls back to native, then English.
@@ -133,8 +174,7 @@ enum TextLogic {
         guard raw.length > 0, utf16Offset >= 0, utf16Offset < raw.length else { return nil }
         var start = 0, end = raw.length
         if !word {
-            guard let breaks = try? NSRegularExpression(pattern: "\\n[ \\t\\r]*\\n|\\r[ \\t]*\\r") else { return nil }
-            for boundary in breaks.matches(in: text, range: NSRange(location: 0, length: raw.length)) {
+            for boundary in paragraphBreakRegex.matches(in: text, range: NSRange(location: 0, length: raw.length)) {
                 if NSMaxRange(boundary.range) <= utf16Offset { start = NSMaxRange(boundary.range) }
                 else if boundary.range.location > utf16Offset { end = boundary.range.location; break }
                 else { return nil }
@@ -142,8 +182,13 @@ enum TextLogic {
         }
         let paragraph = raw.substring(with: NSRange(location: start, length: end - start))
             .replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
-        let offset = utf16Offset - start
-        let utf = paragraph.utf16.index(paragraph.utf16.startIndex, offsetBy: offset)
+        var offset = utf16Offset - start
+        var utf = paragraph.utf16.index(paragraph.utf16.startIndex, offsetBy: offset)
+        // Snap back if an interpolated UTF-16 offset landed on a trailing surrogate.
+        while String.Index(utf, within: paragraph) == nil, offset > 0 {
+            offset -= 1
+            utf = paragraph.utf16.index(paragraph.utf16.startIndex, offsetBy: offset)
+        }
         guard let index = String.Index(utf, within: paragraph) else { return nil }
         let tokenizer = NLTokenizer(unit: word ? .word : .sentence)
         tokenizer.string = paragraph
@@ -155,13 +200,27 @@ enum TextLogic {
     static func segment(_ text: String, utf16Offset: Int, word: Bool) -> String? {
         guard let range = segmentRange(text, utf16Offset: utf16Offset, word: word) else { return nil }
         let result = clean((text as NSString).substring(with: range)
-            .replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " "))
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " "))
         return !result.isEmpty && result.count <= 4000 ? result : nil
     }
 
     struct OCRLine {
         let text: String
         let bounds: CGRect
+    }
+
+    private static func isCJKScalar(_ scalar: UnicodeScalar) -> Bool {
+        let v = scalar.value
+        return (0x3000...0x30FF).contains(v) || (0x31F0...0x31FF).contains(v)
+            || (0x3400...0x4DBF).contains(v) || (0x4E00...0x9FFF).contains(v)
+            || (0xF900...0xFAFF).contains(v) || (0xFF00...0xFFEF).contains(v)
+            || (0x20000...0x2FA1F).contains(v)
+    }
+
+    private static func visualLength(_ text: String) -> Int {
+        text.unicodeScalars.reduce(0) { $0 + (isCJKScalar($1) ? 2 : 1) }
     }
 
     /// Vision boxes use top-left coordinates here. Follow only the same column,
@@ -172,7 +231,7 @@ enum TextLogic {
             let height = max(top.bounds.height, bottom.bounds.height)
             let gap = bottom.bounds.minY - top.bounds.maxY
             let aligned = abs(top.bounds.minX - bottom.bounds.minX) <= max(20, height * 1.3)
-            let prose = max(top.text.count, bottom.text.count) >= 32
+            let prose = max(visualLength(top.text), visualLength(bottom.text)) >= 32
                 && max(top.bounds.width, bottom.bounds.width) >= 160
             return aligned && prose && bottom.bounds.midY > top.bounds.midY
                 && gap >= -height * 0.2 && gap <= height * 1.15
@@ -183,24 +242,31 @@ enum TextLogic {
         var current = hit
         for index in order[..<position].reversed() {
             if lines[index].bounds.midY >= lines[current].bounds.minY { continue }
+            let height = max(lines[index].bounds.height, lines[current].bounds.height)
             if follows(lines[index], lines[current]) {
                 block.insert(index, at: 0); current = index
                 if block.count >= 14 { break }
-            } else if abs(lines[index].bounds.minX - lines[current].bounds.minX) <= 30 { break }
+            } else if abs(lines[index].bounds.minX - lines[current].bounds.minX) <= max(30, height * 1.3) { break }
         }
         current = hit
         for index in order[(position + 1)...] {
             if lines[index].bounds.midY <= lines[current].bounds.maxY { continue }
+            let height = max(lines[current].bounds.height, lines[index].bounds.height)
             if follows(lines[current], lines[index]) {
                 block.append(index); current = index
                 if block.count >= 28 { break }
-            } else if abs(lines[index].bounds.minX - lines[current].bounds.minX) <= 30 { break }
+            } else if abs(lines[index].bounds.minX - lines[current].bounds.minX) <= max(30, height * 1.3) { break }
         }
         var joined = "", hitOffset = 0
         for index in block {
-            if !joined.isEmpty { joined += " " }
-            if index == hit { hitOffset = joined.utf16.count + min(max(0, offset), max(0, lines[index].text.utf16.count - 1)) }
-            joined += lines[index].text
+            let lineText = lines[index].text
+            if !joined.isEmpty {
+                let bothCJK = joined.unicodeScalars.last.map(isCJKScalar) == true
+                    && lineText.unicodeScalars.first.map(isCJKScalar) == true
+                if !bothCJK { joined += " " }
+            }
+            if index == hit { hitOffset = joined.utf16.count + min(max(0, offset), max(0, lineText.utf16.count - 1)) }
+            joined += lineText
         }
         return segment(joined, utf16Offset: hitOffset, word: false)
     }
@@ -221,62 +287,6 @@ enum TextLogic {
         y = min(max(y, visible.minY + 12), visible.maxY - size.height - 12)
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
-
-    static func badgeFrame(pointer: CGPoint, visible: CGRect, source: CGRect = .zero) -> CGRect {
-        let size: CGFloat = 30, gap: CGFloat = 6
-        let safe = visible.insetBy(dx: 6, dy: 6)
-        func clamped(_ x: CGFloat, _ y: CGFloat) -> CGRect {
-            CGRect(x: min(max(x, safe.minX), safe.maxX - size),
-                   y: min(max(y, safe.minY), safe.maxY - size), width: size, height: size)
-        }
-        // Use real text bounds when available. Prefer the closest edge, not the
-        // end of a long sentence. Keep the badge fixed while the pointer travels.
-        // Bounds taller than about two lines are usually a padded control or text
-        // block; their edges can be far from the pointer, so stay by the pointer.
-        if !source.isEmpty, !source.isInfinite, !source.isNull, source.height <= 40 {
-            let options = [
-                clamped(pointer.x - size / 2, source.minY - gap - size),
-                clamped(pointer.x - size / 2, source.maxY + gap),
-                clamped(source.maxX + gap, pointer.y - size / 2),
-                clamped(source.minX - gap - size, pointer.y - size / 2)
-            ].filter { !$0.intersects(source.insetBy(dx: -3, dy: -3)) }
-            if let closest = options.min(by: { distance(pointer, to: $0) < distance(pointer, to: $1) }),
-               distance(pointer, to: closest) <= 24 { return closest }
-        }
-        // Some apps expose the entire container instead of a text line. Do not
-        // send the icon to that container's distant edge.
-        let x = pointer.x + gap + size <= safe.maxX ? pointer.x + gap : pointer.x - size - gap
-        let y = pointer.y - size - gap >= safe.minY ? pointer.y - size - gap : pointer.y + gap
-        return clamped(x, y)
-    }
-
-    static func distance(_ point: CGPoint, to rect: CGRect) -> CGFloat {
-        hypot(max(rect.minX - point.x, 0, point.x - rect.maxX),
-              max(rect.minY - point.y, 0, point.y - rect.maxY))
-    }
-
-    static func movingTowardBadge(from previous: CGPoint, to point: CGPoint, badge: CGRect) -> Bool {
-        let dx = point.x - previous.x, dy = point.y - previous.y
-        let length = hypot(dx, dy)
-        guard length >= 0.5 else { return false }
-        let tx = badge.midX - previous.x, ty = badge.midY - previous.y
-        let targetLength = hypot(tx, ty)
-        guard targetLength > 0 else { return false }
-        // A generous approach cone permits diagonal movement and curved paths.
-        return (dx * tx + dy * ty) / (length * targetLength) >= 0.35
-            && distance(point, to: badge) < distance(previous, to: badge)
-    }
-
-    static func hoverTransitContains(_ point: CGPoint, from source: CGRect, to destination: CGRect) -> Bool {
-        // A narrow bridge keeps the icon reachable without retaining unrelated screen areas.
-        let start = CGPoint(x: min(max(destination.midX, source.minX), source.maxX),
-                            y: min(max(destination.midY, source.minY), source.maxY))
-        let end = CGPoint(x: destination.midX, y: destination.midY)
-        let dx = end.x - start.x, dy = end.y - start.y
-        let denominator = dx * dx + dy * dy
-        let t = denominator > 0 ? min(1, max(0, ((point.x-start.x)*dx + (point.y-start.y)*dy) / denominator)) : 0
-        return hypot(point.x - (start.x + t*dx), point.y - (start.y + t*dy)) <= 15
-    }
 }
 
 struct CapturedText: Sendable {
@@ -285,6 +295,7 @@ struct CapturedText: Sendable {
     let method: String
     // A container label may describe the whole thread rather than the hovered line.
     var needsLineCheck = false
+    var isContainer = false
 }
 
 struct SelectionEdit: Sendable {
@@ -320,15 +331,17 @@ enum CardLayout {
         return lines * line
     }
 
-    static func width(source: String, result: String) -> CGFloat {
-        func measured(_ text: String, size: CGFloat) -> CGFloat {
-            text.components(separatedBy: .newlines).map {
-                ($0 as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size)]).width
+    static func width(source: String, result: String, minimumWidth: CGFloat = CardLayout.minimumWidth) -> CGFloat {
+        func measured(_ text: String, size: CGFloat, weight: NSFont.Weight) -> CGFloat {
+            let font = NSFont.systemFont(ofSize: size, weight: weight)
+            return text.components(separatedBy: .newlines).map {
+                ($0 as NSString).size(withAttributes: [.font: font]).width
             }.max() ?? 0
         }
         // Include the source at reading size so an ordinary sentence stays wide
         // enough when its shorter Chinese translation replaces the loading state.
-        let content = max(measured(source, size: translationFontSize), measured(result, size: translationFontSize))
+        let content = max(measured(source, size: translationFontSize, weight: .medium),
+                          measured(result, size: translationFontSize, weight: .medium))
         var desired = content + 32
         if content > 240 { desired = max(360, desired) }
         if content > 488 { desired = maximumWidth }
@@ -339,9 +352,10 @@ enum CardLayout {
         if loading || choosing { return 20 }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 3
+        let font = NSFont.systemFont(ofSize: translationFontSize, weight: failure ? .regular : .medium)
         let measured = ceil((result as NSString).boundingRect(with: CGSize(width: width - 32, height: 10000),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: translationFontSize), .paragraphStyle: paragraph]).height)
+            attributes: [.font: font, .paragraphStyle: paragraph]).height)
         return failure ? min(96, max(50, measured + 32)) : min(maximumBodyHeight, max(20, measured + 2))
     }
 }

@@ -53,40 +53,6 @@ struct ReplacementTarget: @unchecked Sendable {
         return ReplacementTarget(element: element, pid: pid, edit: edit)
     }
 
-    // After a paste, the selection normally collapses to the end. On the next
-    // explicit icon click, reselect only our unchanged span before restoring it.
-    func prepareSpan() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            TextCapture.queue.async {
-                let app = AXUIElementCreateApplication(pid)
-                AXUIElementSetMessagingTimeout(app, 0.3)
-                let caret = NSRange(location: edit.range.location + edit.range.length, length: 0)
-                guard (try? TextCapture.requireExternalElement(element)) != nil,
-                      let focused = TextCapture.attribute(app, kAXFocusedUIElementAttribute),
-                      CFGetTypeID(focused) == AXUIElementGetTypeID(), CFEqual(focused, element),
-                      Self.editable(element), TextCapture.attribute(element, kAXValueAttribute) as? String == edit.value,
-                      let currentRange = Self.selectedRange(element), currentRange == edit.range || currentRange == caret else {
-                    continuation.resume(throwing: ReplacementError.changed); return
-                }
-                if currentRange != edit.range {
-                    var range = CFRange(location: edit.range.location, length: edit.range.length)
-                    guard let ref = AXValueCreate(.cfRange, &range),
-                          AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, ref) == .success else {
-                        continuation.resume(throwing: ReplacementError.unavailable); return
-                    }
-                }
-                continuation.resume()
-            }
-        }
-    }
-
-    func afterReplacing(with text: String) -> ReplacementTarget? {
-        guard let value = edit.replacing(with: text) else { return nil }
-        return ReplacementTarget(element: element, pid: pid,
-            edit: SelectionEdit(value: value, selected: text,
-                                range: NSRange(location: edit.range.location, length: text.utf16.count)))
-    }
-
     func validate() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             TextCapture.queue.async {
@@ -127,12 +93,16 @@ final class PasteboardLease {
     private let changeCount: Int
     init(text: String, board: NSPasteboard = .general) throws {
         self.board = board
-        items = (board.pasteboardItems ?? []).map { original in
+        let skipTypes = Set<NSPasteboard.PasteboardType>([
+            NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type"),
+            NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")
+        ])
+        items = (board.pasteboardItems ?? []).compactMap { original in
             let copy = NSPasteboardItem()
-            for type in original.types {
+            for type in original.types where !skipTypes.contains(type) {
                 if let data = original.data(forType: type) { copy.setData(data, forType: type) }
             }
-            return copy
+            return copy.types.isEmpty ? nil : copy
         }
         let lease = NSPasteboardItem()
         lease.setString(text, forType: .string)
@@ -178,7 +148,7 @@ enum KeyboardLayout {
                                             UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysMask),
                                             &deadKeys, chars.count, &length, &chars)
                 if status == noErr, length > 0,
-                   String(utf16CodeUnits: chars, count: length).lowercased() == String(character) {
+                   String(utf16CodeUnits: chars, count: length).lowercased() == String(character).lowercased() {
                     return CGKeyCode(code)
                 }
             }
@@ -229,7 +199,21 @@ enum TextReplacement {
             if value != nil, value != original { try? await Task.sleep(nanoseconds: 150_000_000) }
             lease.restore()
             // Never retry a paste whose result is uncertain: it could duplicate text.
-            return await target.currentValue() == expected
+            guard let finalValue = await target.currentValue() else { return false }
+            return Self.matchesExpected(finalValue, expected: expected)
         }.value
+    }
+
+    private static func normalizeEditorText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{201C}", with: "\"")
+            .replacingOccurrences(of: "\u{201D}", with: "\"")
+            .replacingOccurrences(of: "\u{2018}", with: "'")
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+    }
+
+    static func matchesExpected(_ actual: String, expected: String) -> Bool {
+        actual == expected || normalizeEditorText(actual) == normalizeEditorText(expected)
     }
 }

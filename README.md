@@ -4,7 +4,7 @@
 
 Native macOS hover and selection translator built with SwiftUI, AppKit, Vision, Accessibility and Apple Translation. Text and image recognition run locally; no third-party translation API or API key is required.
 
-> 当前为 v0.5.5 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
+> 当前为 v0.5.6 预览版。跨应用取词、输入框替换与撤销的兼容性仍需逐应用验证。
 
 ## 功能
 
@@ -96,7 +96,7 @@ zsh scripts/test.sh
 "$HOME/Applications/浮译.app/Contents/MacOS/HoverTranslate" --check-engine
 ```
 
-- `test.sh`：直接编译执行 100 项文本、语种识别、坐标、图标位置、浮窗尺寸、选区手势与选区替换边界检查。
+- `test.sh`：直接编译执行 93 项文本、语种识别、坐标、浮窗尺寸、选区手势与选区替换边界检查。
 - `--check-hover-flow`：验证取词安全、悬停生命周期、选区浮窗保留、替换按钮状态、按需轮询、临时剪贴板标记与恢复（使用独立临时剪贴板）和无效目标的剪贴板安全；不读取或改写用户设置，不执行对真实输入框的替换。
 - `python3 scripts/check-ocr-context.py <HoverTranslate可执行文件路径>`：使用仓库内合成文字图片验证真实 Vision 跨行 OCR、旁栏隔离、段落间隔、菜单与空白命中；需要 Python 3，不读取屏幕。
 - `--check-engine`：检查已安装的语言包，并在可用时执行真实中英双向翻译。

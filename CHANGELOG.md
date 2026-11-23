@@ -1,7 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.5.6
 
+- Eliminate idle SwiftUI relayout loops caused by unconditional `@Published` mutations in `dismiss()` / `clearReplacement()` during global input and pointer movement.
+- Replace the 4 background 10 Hz preview polling timers in `HomeView` with native `NSTrackingArea`.
+- Remove CPU-only throttling on accurate Vision OCR, stop redundant fast-OCR reruns on blank areas, make OCR refinement cancellable, and run region screenshot OCR off the main thread in a `0o700` temporary directory.
+- Fix `NSScreen.main!` force-unwrap crashes, Dock reopen after closing the main window, Esc dismissal inside the app, and preserve user-dragged card position when switching languages.
+- Cache AI translations (Codex / Claude), stop spawning an auth-check subprocess before every translation, expand CLI/PATH discovery, harden translation prompts against prompt injection, and clean up cancelled/timed-out subprocesses via `terminationHandler`.
+- Prevent "Download language pack" from overwriting the user's global target language setting, verify actual pack installation after the system dialog, fix OCR/language-pack readiness indicators, and align privacy copy with optional AI translation.
+- Support CJK multi-line OCR sentence merging without inserting spaces, snap UTF-16 surrogate pair offsets safely, recognize short diacritic European UI labels, and clean up obsolete badge/menu dead code.
+
+## 0.5.5
+
+- Inline hover subtitle translation, optional local Codex / Claude CLI translation, interactive region screenshot OCR, and right-click translation in `SelectionEditor`.
 - Keep leading and trailing whitespace of the selection when replacing it, so a double-clicked word with its trailing space no longer runs into the next word.
 - Restore the clipboard only after the target editor has consumed the paste (up to 3 seconds) instead of after a fixed 800 ms, so slow editors can no longer paste the previous clipboard.
 - Mark the temporary replacement clipboard as transient and auto-generated so clipboard managers skip it.

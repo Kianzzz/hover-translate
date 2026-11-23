@@ -5,14 +5,34 @@ import Vision
 import NaturalLanguage
 import CoreML
 
-private final class OCRJob: @unchecked Sendable {
-    let request = VNRecognizeTextRequest()
+private final class CancellationFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+    func cancel() { lock.lock(); stopped = true; lock.unlock() }
+}
+
+private final class OCRJob: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+    private var active: VNRecognizeTextRequest?
+    var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+    func track(_ request: VNRecognizeTextRequest) throws {
+        lock.lock()
+        let alreadyStopped = stopped
+        if !alreadyStopped { active = request }
+        lock.unlock()
+        if alreadyStopped {
+            request.cancel()
+            throw CancellationError()
+        }
+    }
     func cancel() {
-        lock.lock(); stopped = true; lock.unlock()
-        request.cancel()
+        lock.lock()
+        stopped = true
+        let current = active
+        lock.unlock()
+        current?.cancel()
     }
 }
 
@@ -127,69 +147,90 @@ enum TextCapture {
         guard let hit = elementAt(point) else { return nil }
         let remote = try ExternalAXElement(hit)
         try Task.checkCancellation()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CapturedText?, Error>) in
-            queue.async {
-                let hit = remote.value
-                var elements = [hit]
-                var parent = hit
-                for _ in 0..<3 {
-                    guard let ref = attribute(parent, kAXParentAttribute), CFGetTypeID(ref) == AXUIElementGetTypeID() else { break }
-                    parent = ref as! AXUIElement
-                    AXUIElementSetMessagingTimeout(parent, 0.2)
-                    elements.append(parent)
-                }
-                // Check the ancestry before falling back to visible pixels.
-                if elements.contains(where: isProtected) { continuation.resume(throwing: CaptureError.protectedText); return }
-                let compactRoles: Set<String> = ["AXStaticText", "AXButton", "AXMenuItem", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXHeading", "AXTextField", "AXCell", "AXTab", "AXRow", "AXImage", "AXToolbarButton", "AXMenuBarItem", "AXDisclosureTriangle", "AXSegmentedControl", "AXSwitch"]
-                var fallback: CapturedText?
-                for (index, element) in elements.enumerated() {
-                    let role = attribute(element, kAXRoleAttribute) as? String ?? ""
-                    if role == "AXWindow" || role == "AXApplication" { break }
-                    let candidates = [attribute(element, kAXValueAttribute) as? String,
-                                      attribute(element, kAXTitleAttribute) as? String,
-                                      attribute(element, kAXDescriptionAttribute) as? String,
-                                      attribute(element, kAXHelpAttribute) as? String]
-                    guard let raw = candidates.compactMap({ $0 }).first(where: { !TextLogic.clean($0).isEmpty }) else { continue }
-                    let text = TextLogic.clean(raw)
-                    guard let rect = bounds(element), rect.insetBy(dx: -4, dy: -4).contains(point) else { continue }
-                    var pointCopy = point
-                    if let pointValue = AXValueCreate(.cgPoint, &pointCopy) {
-                        var rangeRef: CFTypeRef?
-                        if AXUIElementCopyParameterizedAttributeValue(element, kAXRangeForPositionParameterizedAttribute as CFString, pointValue, &rangeRef) == .success,
-                           let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID() {
-                            var range = CFRange()
-                            var boxRef: CFTypeRef?
-                            var charBounds = CGRect.zero
-                            let hasBounds = AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeRef, &boxRef) == .success
-                            if let boxRef, CFGetTypeID(boxRef) == AXValueGetTypeID() { _ = AXValueGetValue(boxRef as! AXValue, .cgRect, &charBounds) }
-                            if hasBounds, charBounds.height > 0, charBounds.insetBy(dx: -6, dy: -5).contains(point),
-                               AXValueGetValue(rangeRef as! AXValue, .cfRange, &range),
-                               let result = TextLogic.segment(raw, utf16Offset: range.location, word: word) {
-                                continuation.resume(returning: CapturedText(text: result, bounds: charBounds, method: "系统取词")); return
+        let flag = CancellationFlag()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CapturedText?, Error>) in
+                queue.async {
+                    guard !flag.cancelled else { continuation.resume(throwing: CancellationError()); return }
+                    let hit = remote.value
+                    var elements = [hit]
+                    var parent = hit
+                    for _ in 0..<3 {
+                        guard !flag.cancelled else { continuation.resume(throwing: CancellationError()); return }
+                        guard let ref = attribute(parent, kAXParentAttribute), CFGetTypeID(ref) == AXUIElementGetTypeID() else { break }
+                        parent = ref as! AXUIElement
+                        AXUIElementSetMessagingTimeout(parent, 0.2)
+                        elements.append(parent)
+                    }
+                    // Check the ancestry before falling back to visible pixels.
+                    if elements.contains(where: isProtected) { continuation.resume(throwing: CaptureError.protectedText); return }
+                    let compactRoles: Set<String> = ["AXStaticText", "AXButton", "AXMenuItem", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXHeading", "AXTextField", "AXCell", "AXTab", "AXRow", "AXImage", "AXToolbarButton", "AXMenuBarItem", "AXDisclosureTriangle", "AXSegmentedControl", "AXSwitch"]
+                    var fallback: CapturedText?
+                    for (index, element) in elements.enumerated() {
+                        guard !flag.cancelled else { continuation.resume(throwing: CancellationError()); return }
+                        let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+                        if role == "AXWindow" || role == "AXApplication" { break }
+                        let valueText = attribute(element, kAXValueAttribute) as? String
+                        let candidates: [(String?, Bool)] = [
+                            (valueText, true),
+                            (attribute(element, kAXTitleAttribute) as? String, false),
+                            (attribute(element, kAXDescriptionAttribute) as? String, false),
+                            (attribute(element, kAXHelpAttribute) as? String, false)
+                        ]
+                        guard let matched = candidates.compactMap({ text, isValue in
+                            guard let text, !TextLogic.clean(text).isEmpty else { return nil as (String, Bool)? }
+                            return (text, isValue)
+                        }).first else { continue }
+                        let raw = matched.0
+                        let fromValue = matched.1
+                        let text = TextLogic.clean(raw)
+                        guard let rect = bounds(element), rect.insetBy(dx: -4, dy: -4).contains(point) else { continue }
+                        // kAXRangeForPositionParameterizedAttribute indexes into AXValue, never AXTitle/AXDescription.
+                        if fromValue {
+                            var pointCopy = point
+                            if let pointValue = AXValueCreate(.cgPoint, &pointCopy) {
+                                var rangeRef: CFTypeRef?
+                                if AXUIElementCopyParameterizedAttributeValue(element, kAXRangeForPositionParameterizedAttribute as CFString, pointValue, &rangeRef) == .success,
+                                   let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID() {
+                                    var range = CFRange()
+                                    var boxRef: CFTypeRef?
+                                    var charBounds = CGRect.zero
+                                    let hasBounds = AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeRef, &boxRef) == .success
+                                    if let boxRef, CFGetTypeID(boxRef) == AXValueGetTypeID() { _ = AXValueGetValue(boxRef as! AXValue, .cgRect, &charBounds) }
+                                    if hasBounds, charBounds.height > 0, charBounds.insetBy(dx: -6, dy: -5).contains(point),
+                                       AXValueGetValue(rangeRef as! AXValue, .cfRange, &range),
+                                       let result = TextLogic.segment(raw, utf16Offset: range.location, word: word) {
+                                        continuation.resume(returning: CapturedText(text: result, bounds: charBounds, method: "系统取词")); return
+                                    }
+                                }
+                            }
+                        }
+                        // UI controls, system menus and labels often expose a title or description,
+                        // not a text value. Large document containers still go through local OCR.
+                        let compact = rect.height <= 240 && text.count <= 4000 && text.components(separatedBy: .newlines).count <= 12
+                        if compact && compactRoles.contains(role) {
+                            if !word || text.split(whereSeparator: { $0.isWhitespace }).count == 1 {
+                                // Preserve complete static paragraphs when AX exposes no character
+                                // position; controls keep their own labels as before.
+                                if fallback == nil {
+                                    let container = ["AXRow", "AXCell", "AXImage"].contains(role)
+                                    fallback = CapturedText(text: text, bounds: rect, method: "系统取词 · 文字块 / 控件",
+                                                            needsLineCheck: index > 0 || container || rect.height > 40,
+                                                            isContainer: index > 0 || container)
+                                }
                             }
                         }
                     }
-                    // UI controls, system menus and labels often expose a title or description,
-                    // not a text value. Large document containers still go through local OCR.
-                    let compact = rect.height <= 240 && text.count <= 4000 && text.components(separatedBy: .newlines).count <= 12
-                    if compact && compactRoles.contains(role) {
-                        if !word || text.split(whereSeparator: { $0.isWhitespace }).count == 1 {
-                            // Preserve complete static paragraphs when AX exposes no character
-                            // position; controls keep their own labels as before.
-                            if fallback == nil {
-                                let container = ["AXRow", "AXCell", "AXImage"].contains(role)
-                                fallback = CapturedText(text: text, bounds: rect, method: "系统取词 · 文字块 / 控件",
-                                                        needsLineCheck: index > 0 || container || rect.height > 40)
-                            }
-                        }
-                    }
+                    continuation.resume(returning: fallback)
                 }
-                continuation.resume(returning: fallback)
             }
+        } onCancel: {
+            flag.cancel()
         }
     }
 
     static func ocr(at point: CGPoint, word: Bool) async throws -> CapturedText? {
+        try Task.checkCancellation()
         guard CGPreflightScreenCaptureAccess() else { throw CaptureError.noScreenPermission }
         var displayID: CGDirectDisplayID = 0
         var count: UInt32 = 0
@@ -200,17 +241,14 @@ enum TextCapture {
                           y: min(max(point.y - height / 2, display.minY), display.maxY - height),
                           width: width, height: height)
         let image = try await SCScreenshotManager.captureImage(in: crop)
+        try Task.checkCancellation()
         return try await hoverText(image: image, region: crop, at: point, word: word)
     }
 
     static func hoverText(image: CGImage, region: CGRect, at point: CGPoint, word: Bool) async throws -> CapturedText? {
-        if let multilingual = try await recognize(image: image, region: region, at: point, word: word, accurate: true) {
-            return multilingual
-        }
-        try Task.checkCancellation()
-        guard let quick = try await recognize(image: image, region: region, at: point, word: word),
-              await MainActor.run(body: { TextLogic.plausibleOCR(quick.text) }) else { return nil }
-        return quick
+        // Accurate multilingual OCR already supersedes fast Latin-only OCR; running a
+        // second full-crop fast pass on blank space only wastes CPU/battery.
+        try await recognize(image: image, region: region, at: point, word: word, accurate: true)
     }
 
     static func accurateLanguages(_ request: VNRecognizeTextRequest) throws -> [String] {
@@ -226,11 +264,11 @@ enum TextCapture {
             (accurate ? accurateQueue : ocrQueue).async {
                 do {
                     if job.cancelled { throw CancellationError() }
-                    let request = job.request
-                    // Hover detection reads Latin-script printed text. The accurate
-                    // recognizer still initializes ANE models even with CPU assigned;
-                    // the fast recognizer avoids that blocking initialization path.
-                    if let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
+                    let request = VNRecognizeTextRequest()
+                    try job.track(request)
+                    // Let Vision use hardware acceleration (ANE/GPU) for accurate recognition;
+                    // only pin fast recognition to CPU if requested.
+                    if !accurate, let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
                         request.setComputeDevice(cpu, for: .main)
                     }
                     request.recognitionLanguages = TextCapture.ocrLanguages
@@ -250,33 +288,35 @@ enum TextCapture {
                         return (candidate.string, box, candidate)
                     }
                     // Hit-test the actual text line. Blank space must not pick the nearest paragraph.
-                    guard var hit = lines.filter({ $0.1.insetBy(dx: -max(4, $0.1.height), dy: -4).contains(point) })
-                        .min(by: { abs($0.1.midY - point.y) < abs($1.1.midY - point.y) }) else {
+                    guard let hitEntry = lines.enumerated()
+                        .filter({ $0.element.1.insetBy(dx: -max(4, $0.element.1.height), dy: -4).contains(point) })
+                        .min(by: { abs($0.element.1.midY - point.y) < abs($1.element.1.midY - point.y) }) else {
                         continuation.resume(returning: nil); return
                     }
-                    guard let originalHit = lines.indices.min(by: { left, right in
-                        hypot(lines[left].1.midX - hit.1.midX, lines[left].1.midY - hit.1.midY)
-                            < hypot(lines[right].1.midX - hit.1.midX, lines[right].1.midY - hit.1.midY)
-                    }) else { continuation.resume(returning: nil); return }
+                    let originalHit = hitEntry.offset
+                    var hit = hitEntry.element
                     var hitRegion = crop
-                    // Nearby control icons can make the fast detector drop an initial
-                    // letter. Re-read just this line, excluding surrounding UI icons.
+                    // Re-read just this line when fast mode or short/low-confidence labels
+                    // might have dropped an edge character next to a UI icon.
+                    let needsRefinement = !accurate || hit.0.count <= 24 || hit.2.confidence < 0.75
                     let lineRegion = hit.1.insetBy(dx: -max(32, hit.1.height * 1.25), dy: -12).intersection(crop)
                     let scaleX = CGFloat(image.width) / crop.width
                     let scaleY = CGFloat(image.height) / crop.height
+                    let imageBounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
                     let pixels = CGRect(x: (lineRegion.minX - crop.minX) * scaleX,
                                         y: (lineRegion.minY - crop.minY) * scaleY,
-                                        width: lineRegion.width * scaleX, height: lineRegion.height * scaleY).integral
-                    if let lineImage = image.cropping(to: pixels) {
+                                        width: lineRegion.width * scaleX, height: lineRegion.height * scaleY)
+                        .integral.intersection(imageBounds)
+                    if needsRefinement, !pixels.isEmpty, let lineImage = image.cropping(to: pixels) {
                         let refinement = VNRecognizeTextRequest()
+                        try job.track(refinement)
                         refinement.recognitionLevel = accurate ? .accurate : .fast
                         refinement.automaticallyDetectsLanguage = accurate
                         refinement.recognitionLanguages = request.recognitionLanguages
                         refinement.usesLanguageCorrection = true
-                        if let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
+                        if !accurate, let cpu = MLComputeDevice.allComputeDevices.first(where: { if case .cpu = $0 { return true }; return false }) {
                             refinement.setComputeDevice(cpu, for: .main)
                         }
-                        if job.cancelled { throw CancellationError() }
                         try VNImageRequestHandler(cgImage: lineImage).perform([refinement])
                         if job.cancelled { throw CancellationError() }
                         let refinedRegion = CGRect(x: crop.minX + pixels.minX / scaleX, y: crop.minY + pixels.minY / scaleY,

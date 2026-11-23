@@ -26,6 +26,7 @@ struct SelectionEditor: NSViewRepresentable {
         editor.isRichText = false
         editor.allowsUndo = true
         editor.drawsBackground = false
+        editor.textColor = .labelColor
         editor.font = .systemFont(ofSize: 16)
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false

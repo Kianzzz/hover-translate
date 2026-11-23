@@ -21,11 +21,16 @@ struct CoreChecks {
         expect(TextLogic.isForeign("你好，世界。今天天气很好。", native: "en"), "母语为英文时中文是外语")
         expect(TextLogic.language(of: "Good design makes complex things feel simple.") == "en", "英文来源检测")
         expect(TextLogic.isForeign("끝", native: "zh-Hans"), "单字韩语按钮")
+        expect(TextLogic.isForeign("开", native: "en"), "英文母语时识别单汉字按钮")
         expect(TextLogic.isForeign("次", native: "zh-Hans", japaneseKanji: true), "日语阅读时识别单汉字")
         expect(!TextLogic.isForeign("次", native: "zh-Hans"), "默认保留中文母语过滤")
         expect(TextLogic.isForeign("へ", native: "zh-Hans"), "单个假名")
         expect(TextLogic.language(of: "Bluetooth 설정") == "ko", "韩语按钮含英文产品名")
         expect(TextLogic.language(of: "Bluetooth を開く") == "ja", "日语按钮含英文产品名")
+        expect(TextLogic.language(of: "Paramètres") == "fr", "带重音符号的短法语词不被误判为英文")
+        expect(TextLogic.language(of: "Configuración") == "es", "带重音符号的短西班牙语词不被误判为英文")
+        expect(!TextLogic.mayContainForeign("这是一段纯中文段落，不包含任何外语文字。", native: "zh-Hans"), "纯中文段落跳过无意义 OCR")
+        expect(TextLogic.mayContainForeign("使用 SwiftUI 构建界面", native: "zh-Hans"), "中英混排段落保留外语检查")
         for phrase in ["Keep in Dock", "Sign in", "Show all", "Learn more", "Open file", "Do not disturb", "Download complete",
                        "Settings saved", "Hover text here", "Read more", "Get started", "Release notes", "Dark mode", "Open in new tab"] {
             expect(TextLogic.language(of: phrase) == "en", "短英文不误判为其他语言：" + phrase)
@@ -57,15 +62,6 @@ struct CoreChecks {
         expect(visible.contains(frame), "浮窗保持在屏幕内")
         expect(frame.minY > 40, "屏幕底部自动向上显示")
         expect(frame.maxX <= -12, "浮窗不越过屏幕右边缘")
-        let badge = TextLogic.badgeFrame(pointer: CGPoint(x: -15, y: 12), visible: visible)
-        expect(visible.contains(badge), "角落图标保持在副屏内")
-        expect(badge.width == 30 && badge.height == 30, "图标保持小尺寸")
-        expect(badge.maxX < -15, "屏幕右边缘时图标放在鼠标左侧")
-        expect(badge.minY > 12, "屏幕底部时图标放在鼠标上方")
-        let source = CGRect(x: 100, y: 300, width: 300, height: 25)
-        let nextBadge = TextLogic.badgeFrame(pointer: CGPoint(x: 150, y: 310), visible: CGRect(x: 0, y: 0, width: 1100, height: 780))
-        expect(TextLogic.hoverTransitContains(CGPoint(x: nextBadge.midX, y: 299), from: source, to: nextBadge), "文字到图标之间可以通行")
-        expect(!TextLogic.hoverTransitContains(CGPoint(x: 900, y: 700), from: source, to: nextBadge), "无关屏幕区域不保留旧图标")
         let shortWidth = CardLayout.width(source: "Keep in Dock", result: "保留在程序坞")
         let sentenceWidth = CardLayout.width(source: "Good design makes complex things feel simple.", result: "好的设计，让复杂的事情变得简单。")
         let longWidth = CardLayout.width(source: String(repeating: "English text. ", count: 40), result: String(repeating: "较长的译文。", count: 100))
@@ -89,32 +85,17 @@ struct CoreChecks {
         expect(SelectionEdit(value: "A A", selected: "A", range: NSRange(location: 2, length: 1)).replacing(with: "B") == "A B", "重复文本按原选区定位")
         expect(SelectionEdit(value: "已改变", selected: selected, range: range).replacing(with: "English") == nil, "内容或选区变化时拒绝替换")
         expect(SelectionEdit(value: draft, selected: "", range: NSRange(location: 0, length: 0)).replacing(with: "English") == nil, "空选区不能插入译文")
-        let line = CGRect(x: 100, y: 300, width: 500, height: 22)
-        let origin = CGPoint(x: 300, y: 311)
-        let nearby = TextLogic.badgeFrame(pointer: origin, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: line)
-        expect(!nearby.intersects(line), "图标不遮挡已知文字边界")
-        expect(TextLogic.distance(origin, to: nearby) <= 18, "长句中间悬停时图标就在附近")
-        expect(TextLogic.movingTowardBadge(from: origin, to: CGPoint(x: 303, y: 304), badge: nearby), "斜向接近图标保持可达")
-        expect(!TextLogic.movingTowardBadge(from: origin, to: CGPoint(x: 303, y: 322), badge: nearby), "反向离开不保留图标")
-        expect(!TextLogic.movingTowardBadge(from: origin, to: origin, badge: nearby), "静止不能无限延续接近状态")
-        let twoLineBlock = CGRect(x: 100, y: 300, width: 400, height: 56)
-        let blockPointer = CGPoint(x: 260, y: 328)
-        let blockBadge = TextLogic.badgeFrame(pointer: blockPointer, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: twoLineBlock)
-        expect(TextLogic.distance(blockPointer, to: blockBadge) <= 12, "两行文字块中间悬停时图标贴近鼠标")
-        let paddedLine = CGRect(x: 100, y: 300, width: 400, height: 36)
-        let paddedBadge = TextLogic.badgeFrame(pointer: CGPoint(x: 260, y: 318), visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: paddedLine)
-        expect(TextLogic.distance(CGPoint(x: 260, y: 318), to: paddedBadge) <= 24, "带留白的控件边缘较远时不贴边")
-        let huge = TextLogic.badgeFrame(pointer: origin, visible: CGRect(x: 0, y: 0, width: 1000, height: 800), source: CGRect(x: 0, y: 0, width: 1000, height: 800))
-        expect(TextLogic.distance(origin, to: huge) < 10, "容器级边界不能把图标推远")
         let wrapped = "Previous sentence. This sentence continues across\na visual line break and ends here. Next sentence."
         let wrappedOffset = (wrapped as NSString).range(of: "visual").location
         expect(TextLogic.segment(wrapped, utf16Offset: wrappedOffset, word: false) == "This sentence continues across a visual line break and ends here.", "系统取词跨软换行提取完整句子")
         let paragraphs = "First paragraph without punctuation\n\nSecond paragraph without punctuation"
         expect(TextLogic.segment(paragraphs, utf16Offset: 8, word: false) == "First paragraph without punctuation", "空行隔开的段落不能混在一起")
         let crlf = "A sentence continues\r\non the next line."
-        expect(TextLogic.segment(crlf, utf16Offset: 24, word: false) == "A sentence continues  on the next line.", "CRLF 换行不误判为段落分隔")
+        expect(TextLogic.segment(crlf, utf16Offset: 24, word: false) == "A sentence continues on the next line.", "CRLF 换行合并为单个空格且不误判为段落分隔")
         let split = "你好 🌿。A long sentence wraps\nacross this line."
         expect(TextLogic.segment(split, utf16Offset: (split as NSString).range(of: "across").location, word: false) == "A long sentence wraps across this line.", "跨行与 emoji UTF16 偏移保持准确")
+        let emojiStart = (split as NSString).range(of: "🌿").location
+        expect(TextLogic.segment(split, utf16Offset: emojiStart + 1, word: false) != nil, "落在 emoji UTF16 低代理位时自动对齐不丢句")
         func ocrLine(_ text: String, _ x: CGFloat, _ y: CGFloat, _ width: CGFloat = 420) -> TextLogic.OCRLine {
             TextLogic.OCRLine(text: text, bounds: CGRect(x: x, y: y, width: width, height: 20))
         }
@@ -126,6 +107,9 @@ struct CoreChecks {
         expect(TextLogic.ocrSentence(lines: context, hit: 1, offset: 5) == "This is a long sentence that continues on the next line and needs context to translate correctly.", "OCR 合并跨三行句子并隔离相邻栏目")
         expect(TextLogic.ocrSentence(lines: context, hit: 2, offset: 30) == "Another sentence.", "同一行按鼠标位置选中正确句子")
         expect(TextLogic.ocrSentence(lines: context, hit: 3, offset: 10) == context[3].text, "段落间距阻止跨段合并")
+        let jpParagraph = [ocrLine("これは日本語の長い文章であり、次の行に", 100, 100, 320),
+                           ocrLine("そのまま続いて正しく翻訳されるべきです。", 100, 128, 320)]
+        expect(TextLogic.ocrSentence(lines: jpParagraph, hit: 0, offset: 4) == "これは日本語の長い文章であり、次の行にそのまま続いて正しく翻訳されるべきです。", "日语多行 OCR 正常合并且不插入多余空格")
         let menu = [ocrLine("Keep in Dock", 100, 100, 110), ocrLine("Open at Login", 100, 128, 110)]
         expect(TextLogic.ocrSentence(lines: menu, hit: 0, offset: 3) == "Keep in Dock", "短菜单项不能拼成段落")
         let missing = [ocrLine("Text on the first line of a longer paragraph", 100, 100), ocrLine("Text in a distant paragraph should not join.", 100, 260)]

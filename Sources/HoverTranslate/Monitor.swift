@@ -12,9 +12,9 @@ final class HoverMonitor {
     var visibleCardFrame: (() -> CGRect?)?
     private var candidate: Candidate?
     private var outsideSince: Date?
-    private var timer: Timer?
-    private var globalEvents: Any?
-    private var localScrollEvents: Any?
+    nonisolated(unsafe) private var timer: Timer?
+    nonisolated(unsafe) private var globalEvents: Any?
+    nonisolated(unsafe) private var localEvents: Any?
     private var lastPoint = CGPoint.zero
     private var stableSince = Date()
     private var attempted = false
@@ -28,6 +28,13 @@ final class HoverMonitor {
     private var enabledSubscription: AnyCancellable?
 
     init(model: AppModel) { self.model = model }
+
+    deinit {
+        timer?.invalidate()
+        if let globalEvents { NSEvent.removeMonitor(globalEvents) }
+        if let localEvents { NSEvent.removeMonitor(localEvents) }
+    }
+
     var desktopTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 
     func start() {
@@ -40,32 +47,49 @@ final class HoverMonitor {
         globalEvents = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .leftMouseDown, .rightMouseDown, .scrollWheel, .keyDown]) { [weak self] event in
             // Read pointer and click details now; the hop below runs later.
             let location = NSEvent.mouseLocation
-            let clickCount = event.type == .leftMouseUp ? event.clickCount : 0
+            let type = event.type
+            let keyCode = type == .keyDown ? event.keyCode : 0
+            let clickCount = type == .leftMouseUp ? event.clickCount : 0
             let extending = event.modifierFlags.contains(.shift)
             Task { @MainActor in
                 guard let self else { return }
                 // The app's own normal paste emits key events in the destination.
                 if self.model.isReplacing { return }
-                if event.type == .keyDown {
-                    if event.keyCode == 53 { self.selectionTask?.cancel() }
-                    self.model.dismiss(force: event.keyCode == 53)
+                let active = self.model.enabled || self.model.isPresenting || self.candidate != nil || self.visibleCardFrame?() != nil
+                guard active else { return }
+                if type == .keyDown {
+                    if keyCode == 53 { self.selectionTask?.cancel() }
+                    if self.model.isPresenting || self.candidate != nil {
+                        self.model.dismiss(force: keyCode == 53)
+                    }
                     self.resetMotion(at: location)
                     self.attempted = true
                     return
                 }
-                if event.type == .leftMouseDown { self.mouseDownPoint = location }
-                let selected = event.type == .leftMouseUp && TextLogic.isSelectionGesture(
+                if type == .leftMouseDown { self.mouseDownPoint = location }
+                let selected = type == .leftMouseUp && TextLogic.isSelectionGesture(
                     from: self.mouseDownPoint, to: location, clickCount: clickCount, extending: extending)
                 self.selectionTask?.cancel()
-                self.model.dismiss()
+                if self.model.isPresenting || self.candidate != nil {
+                    self.model.dismiss()
+                }
                 self.resetMotion(at: location)
-                self.attempted = selected || event.type == .rightMouseDown
+                self.attempted = selected || type == .rightMouseDown
             }
         }
-        localScrollEvents = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
-            Task { @MainActor in
-                guard let self, self.model.pointerInCard?() != true else { return }
-                self.model.dismiss()
+        localEvents = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyDown && event.keyCode == 53 {
+                if self.model.isPresenting || self.candidate != nil {
+                    self.model.dismiss(force: true)
+                    return nil
+                }
+                return event
+            }
+            if event.type == .scrollWheel || event.type == .leftMouseDown {
+                if (self.model.isPresenting || self.candidate != nil) && self.model.pointerInCard?() != true {
+                    self.model.dismiss()
+                }
             }
             return event
         }
@@ -101,7 +125,7 @@ final class HoverMonitor {
     func stage(_ capture: CapturedText, sourceRect: CGRect, pointer: CGPoint, demo: Bool = false) {
         guard !model.pinned else { return }
         let vicinity = CGRect(x: pointer.x - 24, y: pointer.y - 8, width: 48, height: 16)
-        let region = sourceRect.contains(pointer) && sourceRect.height <= 44 ? sourceRect : vicinity
+        let region = sourceRect.contains(pointer) && (demo || sourceRect.height <= 44) ? sourceRect : vicinity
         candidate = Candidate(region: region.insetBy(dx: -3, dy: -2), demo: demo)
         outsideSince = nil
         startPolling()
@@ -133,11 +157,12 @@ final class HoverMonitor {
     }
 
     private func tick() {
-        // Refresh on return to the app, without repeatedly querying TCC while
-        // the user is editing permissions in System Settings.
-        if NSApp.isActive && Date().timeIntervalSince(lastPermissionRefresh) > 2 {
+        let now = Date()
+        let missingPermission = model.enabled && (!model.accessibility || (model.ocrEnabled && !model.screenPermission))
+        let refreshInterval: TimeInterval = NSApp.isActive ? 2 : (missingPermission ? 3 : .infinity)
+        if now.timeIntervalSince(lastPermissionRefresh) > refreshInterval {
             model.refreshPermissions()
-            lastPermissionRefresh = Date()
+            lastPermissionRefresh = now
         }
         if model.enabled != previousEnabled {
             resetMotion(at: NSEvent.mouseLocation)
@@ -154,16 +179,16 @@ final class HoverMonitor {
         // Keep it reachable across any gap until an outside click/scroll or close.
         if model.capturingRegion { return }
         if retainSelection() { return }
-        if retainCandidate(at: point) { return }
+        if retainCandidate(at: point, now: now) { return }
         guard model.enabled, !model.pinned else { return }
         if let frame = visibleCardFrame?(), frame.insetBy(dx: -12, dy: -12).contains(point) { return }
         let moved = hypot(point.x - lastPoint.x, point.y - lastPoint.y) > 3
         if moved || NSEvent.pressedMouseButtons != 0 {
             resetMotion(at: point)
-            model.dismiss()
+            if model.isPresenting || candidate != nil { model.dismiss() }
             return
         }
-        guard model.hoverEnabled, !attempted, Date().timeIntervalSince(stableSince) >= model.delay else { return }
+        guard model.hoverEnabled, !attempted, now.timeIntervalSince(stableSince) >= model.delay else { return }
         attempted = true
         guard model.accessibility || (model.ocrEnabled && model.screenPermission) else { return }
         let token = revision
@@ -177,7 +202,14 @@ final class HoverMonitor {
                 if model.accessibility { capture = try await TextCapture.accessible(at: quartz, word: word) }
                 guard !Task.isCancelled, token == revision else { return }
                 let native = model.nativeLanguage
-                if capture == nil || capture?.needsLineCheck == true, model.ocrEnabled, model.screenPermission {
+                let shouldRunOCR: Bool
+                if let existing = capture {
+                    shouldRunOCR = existing.needsLineCheck
+                        && (existing.isContainer || TextLogic.mayContainForeign(existing.text, native: native, japaneseKanji: model.japaneseKanji))
+                } else {
+                    shouldRunOCR = true
+                }
+                if shouldRunOCR, model.ocrEnabled, model.screenPermission {
                     // Prefer text at the pointer over a guessed row or paragraph label.
                     // Keep the AX result if Vision cannot resolve the line.
                     if capture == nil { capture = try await TextCapture.ocr(at: quartz, word: word) }
@@ -190,6 +222,7 @@ final class HoverMonitor {
                 guard !Task.isCancelled, token == revision else { return }
                 // Do not OCR or publish changes when the target is our own UI.
                 if case CaptureError.ownApplication = error { return }
+                if error is CancellationError { return }
                 model.status = error.localizedDescription
             }
         }
@@ -211,13 +244,13 @@ final class HoverMonitor {
     }
 
     func readSelection() {
-        guard !model.pinned, let front = NSWorkspace.shared.frontmostApplication,
+        guard let front = NSWorkspace.shared.frontmostApplication,
               front.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         selectionTask?.cancel()
         captureTask?.cancel()
         revision += 1
         attempted = true
-        model.dismiss()
+        model.dismiss(force: true)
         let pid = front.processIdentifier
         let point = TextLogic.quartzPoint(NSEvent.mouseLocation, desktopTop: desktopTop)
         selectionTask = Task { [weak self] in
@@ -225,6 +258,7 @@ final class HoverMonitor {
             guard !Task.isCancelled else { return }
             guard model.accessibility else {
                 model.requestAccessibility()
+                model.showWindow?()
                 attempted = false
                 return
             }
@@ -237,7 +271,10 @@ final class HoverMonitor {
                 guard !Task.isCancelled else { return }
                 attempted = false
                 stableSince = Date()
-                model.status = error.localizedDescription; model.showWindow?()
+                model.status = error.localizedDescription
+                if case CaptureError.nothingSelected = error { return }
+                if case CaptureError.protectedText = error { return }
+                model.showWindow?()
             }
         }
     }

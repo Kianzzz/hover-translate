@@ -82,17 +82,36 @@ struct MainView: View {
         .foregroundStyle(Palette.ink)
         .preferredColorScheme(.light)
         .translationTask(model.preparationConfig) { session in
+            let targetSource = model.preparingSource
+            let targetDest = model.preparingTarget ?? model.targetLanguage
             do {
                 try await session.prepareTranslation()
                 await model.refreshLanguage()
-                model.preparationMessage = "语言包已下载，可以开始翻译。"
+                let installed: Bool
+                if let targetSource {
+                    let status = await TranslationRuntime.availability().status(
+                        from: Locale.Language(identifier: targetSource),
+                        to: Locale.Language(identifier: targetDest)
+                    )
+                    installed = status == .installed
+                } else {
+                    installed = model.languageReady
+                }
+                model.preparationMessage = installed
+                    ? "语言包已下载，可以开始翻译。"
+                    : "语言包尚未完成下载；如已取消，可重新点击“下载”或在系统设置中查看进度。"
             } catch {
                 model.preparationMessage = "准备失败：" + error.localizedDescription
                 await model.refreshLanguage()
             }
             model.preparing = false
             model.preparingSource = nil
+            model.preparingTarget = nil
         }
+    }
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.6"
     }
 
     private var sidebar: some View {
@@ -114,7 +133,7 @@ struct MainView: View {
             nav("settings", "偏好设置", "slider.horizontal.3")
             Spacer()
             powerCard
-            Text("v0.5.5 · \(model.provider.rawValue)").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+            Text("v\(appVersion) · \(model.provider.rawValue)").font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 .padding(.top, 14).padding(.horizontal, 6)
         }.padding(.horizontal, 14).padding(.top, 52).padding(.bottom, 20)
             .frame(width: 212).background(Palette.sidebar)
@@ -200,7 +219,7 @@ struct HomeView: View {
                 IconTile(symbol: ready ? "checkmark.seal.fill" : "exclamationmark.triangle", size: 36)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(ready ? "取词、识图与翻译均已就绪" : "还差一步 · 检查权限与翻译服务").font(.system(size: 13, weight: .semibold))
-                    Text("取词 \(model.accessibility ? "已授权" : "待授权")  ·  识图 \(model.screenPermission ? "已授权" : "待授权")  ·  \(model.provider.rawValue)")
+                    Text("取词 \(model.accessibility ? "已授权" : "待授权")  ·  识图 \(!model.ocrEnabled ? "已关闭" : (model.screenPermission ? "已授权" : "待授权"))  ·  \(model.provider.rawValue)")
                         .font(.system(size: 11)).foregroundStyle(Palette.secondary)
                 }
                 Spacer()
@@ -209,7 +228,7 @@ struct HomeView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
-    private var ready: Bool { model.accessibility && (model.provider == .apple ? model.languageReady : model.availableProviders.contains(model.provider)) && model.screenPermission && model.ocrEnabled }
+    private var ready: Bool { model.accessibility && (model.provider == .apple ? model.languageReady : model.availableProviders.contains(model.provider)) && (!model.ocrEnabled || model.screenPermission) }
 
     private var browserPreview: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -306,42 +325,68 @@ struct HoverSampleSensor: NSViewRepresentable {
     func updateNSView(_ nsView: SensorView, context: Context) { nsView.changed = changed }
     final class SensorView: NSView {
         var changed: ((Bool, CGRect) -> Void)?
-        var polling: Timer?
-        var inside = false
-        var debugTicks = 0
+        private var area: NSTrackingArea?
+        private var inside = false
+
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let area { removeTrackingArea(area) }
+            let tracking = NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(tracking)
+            area = tracking
+        }
+
+        private var screenRect: CGRect {
+            guard let window else { return .zero }
+            return window.convertToScreen(convert(bounds, to: nil))
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            guard !inside, NSEvent.pressedMouseButtons == 0 else { return }
+            inside = true
+            changed?(true, screenRect)
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            guard inside else { return }
+            inside = false
+            changed?(false, screenRect)
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            polling?.invalidate()
-            guard window != nil else { return }
-            let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.sample() }
+            if window == nil && inside {
+                inside = false
+                changed?(false, .zero)
             }
-            polling = timer
-            RunLoop.main.add(timer, forMode: .common)
         }
-        func sample() {
-            guard let window else { polling?.invalidate(); return }
-            let rect = window.convertToScreen(convert(bounds, to: nil))
-            if ProcessInfo.processInfo.environment["HOVER_TRANSLATE_DEBUG"] == "1" {
-                debugTicks += 1
-                if debugTicks % 10 == 0 { NSLog("HTSensor rect=%@ point=%@ active=%d key=%d hidden=%d", NSStringFromRect(rect), NSStringFromPoint(NSEvent.mouseLocation), NSApp.isActive, window.isKeyWindow, isHiddenOrHasHiddenAncestor) }
-            }
-            let point = NSEvent.mouseLocation
-            let nowInside = window.isVisible && !isHiddenOrHasHiddenAncestor && NSEvent.pressedMouseButtons == 0
-                && rect.contains(point) && NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0) == window.windowNumber
-            if nowInside != inside { inside = nowInside; changed?(inside, rect) }
-        }
-        deinit { polling?.invalidate() }
     }
 }
 
 struct HoverSubtitle: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        Text(model.subtitleText).font(.system(size: 12)).lineLimit(1)
-            .padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.regularMaterial, in: Capsule())
+        HStack(spacing: 5) {
+            if model.phase == .failure {
+                Image(systemName: "exclamationmark.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.orange)
+            }
+            Text(model.subtitleText)
+                .font(.system(size: 12))
+                .foregroundStyle(model.phase == .failure ? Color.secondary : Color.primary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial, in: Capsule())
     }
 }
 
@@ -357,7 +402,8 @@ struct TryView: View {
                 HStack {
                     Text("原文").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Text("\(model.manualText.count) / 8,000").font(.system(size: 11, design: .rounded)).foregroundStyle(Palette.secondary)
+                    Text("\(model.manualText.count) / 8,000").font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(model.manualText.count > 8000 ? Color.red : Palette.secondary)
                 }.padding(.bottom, 12)
                 SelectionEditor(text: $model.manualText, translate: model.presentSelection)
                     .padding(14).frame(height: 200)
@@ -393,12 +439,26 @@ struct SettingsView: View {
             Panel {
                 cardTitle("语言")
                 row("sparkles", "翻译服务", "选用 AI 后，待翻译的文字会发送至对应服务并使用账号额度。截图在本机识别。") {
-                    Picker("翻译服务", selection: $model.provider) {
-                        ForEach(AIProvider.allCases.filter { model.availableProviders.contains($0) || model.provider == $0 }, id: \.self) { p in
-                            Text(p.rawValue).tag(p)
-                        }
-                    }.labelsHidden()
-                    Button("检测登录") { Task { await model.refreshProviders() } }
+                    HStack(spacing: 8) {
+                        Picker("翻译服务", selection: $model.provider) {
+                            ForEach(AIProvider.allCases.filter { model.availableProviders.contains($0) || model.provider == $0 }, id: \.self) { p in
+                                Text(p.rawValue).tag(p)
+                            }
+                        }.labelsHidden()
+                        Button {
+                            Task { await model.refreshProviders(interactive: true) }
+                        } label: {
+                            HStack(spacing: 5) {
+                                if model.checkingProviders { ProgressView().controlSize(.mini) }
+                                Text(model.checkingProviders ? "检测中…" : "检测登录")
+                            }
+                        }.buttonStyle(SoftButton()).disabled(model.checkingProviders)
+                    }
+                }
+                if !model.providerCheckMessage.isEmpty {
+                    Text(model.providerCheckMessage)
+                        .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                        .padding(.top, 8).padding(.leading, 45)
                 }
                 Divider().padding(.vertical, 14)
                 row("person.wave.2", "母语", "悬停时跳过母语文字；选中母语文字仍可翻译。") {
@@ -411,7 +471,9 @@ struct SettingsView: View {
                     languagePicker("译成", $model.targetLanguage)
                 }
                 Divider().padding(.vertical, 14)
-                row("arrow.down.circle", "语言包", "把各语种译成\(TextLogic.displayName(model.targetLanguage))需要先下载对应的离线语言包。") {
+                row("arrow.down.circle", "语言包", model.provider == .apple
+                    ? "把各语种译成\(TextLogic.displayName(model.targetLanguage))需要先下载对应的离线语言包。"
+                    : "当前使用 AI 翻译，以下语言包仅用于 Apple 离线翻译。") {
                     Button("在系统设置中下载") { model.openSystemTranslationSettings() }.buttonStyle(SoftButton())
                 }
                 packPicker.padding(.top, 14).padding(.leading, 45)
@@ -441,7 +503,7 @@ struct SettingsView: View {
                 toggleRow("text.viewfinder", "允许本机 OCR 补充识别", "需要屏幕录制权限；识别范围限于鼠标附近。", $model.ocrEnabled)
                 Divider().padding(.vertical, 14)
                 row("timer", "悬停等待", "鼠标停留多久后显示译文。") {
-                    slider($model.delay, 0.3...1.5, 0.1, "\(Int(model.delay * 1000)) ms")
+                    slider($model.delay, 0.3...1.5, 0.1, "\(Int((model.delay * 1000).rounded())) ms")
                 }
                 Divider().padding(.vertical, 14)
                 row("xmark.circle", "移开后关闭", "适用于悬停译文；选区浮窗保留至点击外部或关闭。") {
@@ -456,7 +518,7 @@ struct SettingsView: View {
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 140)
                 }
             }
-            Text("不自动读取剪贴板，不记录翻译历史，不上传截图或文字。关闭窗口后仍可从菜单栏使用；退出可按 ⌘Q。")
+            Text("不自动读取剪贴板，不记录翻译历史，截图仅在本机识别。使用 Apple 离线语言包时全程离线；选用 AI 服务时仅将待翻译文字发送至所选服务。关闭窗口后仍可从菜单栏使用；退出可按 ⌘Q。")
                 .font(.system(size: 11)).foregroundStyle(Palette.secondary).lineSpacing(4)
         }.onAppear { model.refreshPermissions(); Task { await model.refreshLanguage() } }
     }
@@ -515,8 +577,10 @@ struct SettingsView: View {
                 Button("复制应用路径") { model.copyApplicationPath() }.buttonStyle(SoftButton())
                 Button("在访达中显示浮译") { model.revealApplication() }.buttonStyle(SoftButton())
             }
-            Text("浮译位于个人“应用程序”目录，系统添加窗口默认可能打开另一个“应用程序”目录。")
-                .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+            if model.applicationPath.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path + "/Applications") {
+                Text("浮译位于个人“应用程序”目录，系统添加窗口默认可能打开另一个“应用程序”目录。")
+                    .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+            }
         }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.paper).clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous)).padding(.top, 14)
     }
@@ -603,9 +667,10 @@ struct TranslationCard: View {
                 Spacer(minLength: 4)
                 HStack(spacing: 1) {
                     if model.method == "截图 OCR" {
-                        tool("doc.on.clipboard", help: "复制提取的原文") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(model.source, forType: .string)
+                        tool(model.copiedSource ? "checkmark" : "doc.on.clipboard",
+                             help: model.copiedSource ? "已复制提取原文" : "复制提取的原文",
+                             active: model.copiedSource) {
+                            model.copySource()
                         }
                     }
                     tool(model.pinned ? "pin.fill" : "pin", help: model.pinned ? "取消固定" : "固定浮窗",
@@ -615,11 +680,23 @@ struct TranslationCard: View {
                     tool("xmark", help: "关闭浮窗") { model.dismiss(force: true) }
                 }
             }.padding(.leading, 14).padding(.trailing, 8).frame(height: CardLayout.headerHeight)
-            Text(model.source).font(.system(size: CardLayout.sourceFontSize)).lineSpacing(2)
-                .lineLimit(CardLayout.sourceLineLimit).truncationMode(.tail)
-                .foregroundStyle(MistCardPalette.secondary).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: model.cardSourceHeight, alignment: .topLeading)
-                .padding(.horizontal, 16).help(model.source)
+            Group {
+                if model.method == "截图 OCR" {
+                    ScrollView {
+                        Text(model.source).font(.system(size: CardLayout.sourceFontSize)).lineSpacing(2)
+                            .foregroundStyle(MistCardPalette.secondary).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }.scrollIndicators(.automatic)
+                } else {
+                    Text(model.source).font(.system(size: CardLayout.sourceFontSize)).lineSpacing(2)
+                        .lineLimit(CardLayout.sourceLineLimit).truncationMode(.tail)
+                        .foregroundStyle(MistCardPalette.secondary).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+            .frame(height: model.cardSourceHeight, alignment: .topLeading)
+            .padding(.horizontal, 16).help(model.source)
             Rectangle().fill(MistCardPalette.secondary.opacity(0.14)).frame(height: 1)
                 .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 9)
             Group {
