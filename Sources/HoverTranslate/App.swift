@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let bar = self?.selectionToolbar, bar.isVisible else { return nil }
             return bar.frame
         }
+        monitor.subtitleWindowNumber = { [weak self] in self?.subtitle.windowNumber }
         monitor.start()
         model.showCard = { [weak self] anchor in self?.showCard(anchor) }
         model.hideCard = { [weak self] in
@@ -191,8 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         glass.material = .popover
         glass.blendingMode = .behindWindow
         glass.state = .active
+        glass.appearance = NSAppearance(named: .aqua)
         glass.wantsLayer = true
-        glass.layer?.cornerRadius = 14
+        glass.layer?.cornerRadius = 16
         glass.layer?.masksToBounds = true
         let content = fixedHostingView(TranslationCard(model: model), size: glass.bounds.size)
         content.autoresizingMask = [.width, .height]

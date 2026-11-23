@@ -31,27 +31,28 @@ private final class ToolbarOrbState: ObservableObject {
     }
 }
 
-/// Three refined minimalist circular orbs in coss.com/ui style that pop in
-/// sequentially beside selected text: Translate, Copy, and Save.
+/// Three refined minimalist circular orbs in the frosted-glass + forest-green
+/// capsule aesthetic that pop in sequentially beside selected text:
+/// Translate, Copy, and Save.
 struct SelectionToolbarView: View {
     @ObservedObject var model: AppModel
     @StateObject private var ui = ToolbarOrbState()
 
     var body: some View {
         HStack(spacing: 10) {
-            orb(index: 0, id: "translate", title: "翻译") {
+            orb(index: 0, id: "translate", title: "翻译", accentRest: true) {
                 Text("译")
                     .font(.system(size: 11.5, weight: .semibold))
             } action: {
                 model.toolbarActionTranslate?()
             }
-            orb(index: 1, id: "copy", title: "复制") {
+            orb(index: 1, id: "copy", title: "复制", accentRest: false) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 10.5, weight: .medium))
             } action: {
                 model.toolbarActionCopy?()
             }
-            orb(index: 2, id: "save", title: "保存") {
+            orb(index: 2, id: "save", title: "保存", accentRest: false) {
                 Image(systemName: "bookmark")
                     .font(.system(size: 10.5, weight: .medium))
             } action: {
@@ -61,6 +62,7 @@ struct SelectionToolbarView: View {
         .padding(.bottom, 12)
         .frame(width: 136, height: 64, alignment: .bottom)
         .background(Color.clear)
+        .preferredColorScheme(.light)
         .onAppear {
             if model.toolbarShown { ui.playPopIn() }
         }
@@ -76,6 +78,7 @@ struct SelectionToolbarView: View {
         index: Int,
         id: String,
         title: String,
+        accentRest: Bool,
         @ViewBuilder icon: () -> Icon,
         action: @escaping () -> Void
     ) -> some View {
@@ -85,20 +88,21 @@ struct SelectionToolbarView: View {
         return Button(action: action) {
             ZStack {
                 Circle()
-                    .fill(isHovered ? Coss.primary : Coss.popover)
+                    .fill(.regularMaterial)
                 Circle()
-                    .stroke(isHovered ? Coss.primary : Coss.inputBorder, lineWidth: 1)
-                if !isHovered {
-                    Circle()
-                        .stroke(Coss.innerHighlight, lineWidth: 0.5)
-                        .padding(0.75)
-                }
+                    .fill(isHovered ? Palette.green : Color.white.opacity(0.76))
+                Circle()
+                    .stroke(isHovered ? Palette.green : Color.black.opacity(0.08), lineWidth: 0.75)
                 icon()
-                    .foregroundStyle(isHovered ? Coss.primaryForeground : Coss.foreground)
+                    .foregroundStyle(
+                        isHovered
+                            ? Color.white
+                            : (accentRest ? Palette.green : MistCardPalette.ink)
+                    )
             }
             .frame(width: 28, height: 28)
             .shadow(
-                color: Color.black.opacity(isHovered ? 0.22 : 0.14),
+                color: isHovered ? Palette.green.opacity(0.28) : Color.black.opacity(0.12),
                 radius: isHovered ? 7 : 4.5,
                 x: 0,
                 y: isHovered ? 3 : 2
@@ -108,13 +112,13 @@ struct SelectionToolbarView: View {
                 if isHovered {
                     Text(title)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Coss.primaryForeground)
+                        .foregroundStyle(Color.white)
                         .fixedSize()
-                        .padding(.horizontal, 6.5)
-                        .padding(.vertical, 2)
-                        .background(Coss.primary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(Palette.green)
                         .clipShape(Capsule())
-                        .shadow(color: Color.black.opacity(0.16), radius: 4, y: 1.5)
+                        .shadow(color: Palette.green.opacity(0.24), radius: 4, y: 1.5)
                         .offset(y: -23)
                         .allowsHitTesting(false)
                         .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .bottom)))
@@ -162,69 +166,65 @@ struct SnippetsView: View {
     }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             SectionHeading(
-                eyebrow: "SNIPPETS",
-                title: "摘录本",
-                subtitle: "划词点击「保存」或在翻译浮窗点击书签即可收藏到这里，并自动非破坏性追加到本地 Markdown 文件。"
+                eyebrow: "摘录本",
+                title: "收藏好句子。",
+                subtitle: "划词点击「保存」圆球或在翻译浮窗点书签图标，内容会保存在这里，并自动非破坏性追加到你的本地 Markdown 文件。"
             )
-            CossCardFrame(contentPadding: 14) {
-                HStack {
-                    Text("Markdown 同步文件").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    CossBadge(text: "自动追加", tone: .success)
-                }
-            } content: {
+            Panel(padding: 16) {
                 HStack(spacing: 12) {
-                    CossIconTile(symbol: "doc.text", size: 32)
-                    Text(model.snippetsMarkdownPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Coss.mutedForeground)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
+                    IconTile(symbol: "doc.text", size: 34)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Text("同步的 Markdown 文件").font(.system(size: 12.5, weight: .semibold))
+                            CapsulePill(text: "自动追加", accent: true)
+                        }
+                        Text(model.snippetsMarkdownPath)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(Palette.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
                     Spacer()
                     Button("打开文件") { model.openSnippetsMarkdownFile() }
-                        .buttonStyle(CossButtonStyle(variant: .outline, compact: true))
+                        .buttonStyle(CapsuleButton(compact: true))
                     Button("更改位置…") { model.chooseSnippetsMarkdownLocation() }
-                        .buttonStyle(CossButtonStyle(variant: .outline, compact: true))
+                        .buttonStyle(CapsuleButton(compact: true))
                 }
             }
-
             HStack(spacing: 10) {
                 HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Coss.mutedForeground)
+                    Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(Palette.secondary)
                     TextField("搜索原文、译文或来源应用…", text: $ui.query)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5))
                     if !ui.query.isEmpty {
                         Button { ui.query = "" } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(Coss.mutedForeground)
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(Palette.secondary)
                         }.buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 11).padding(.vertical, 7)
-                .background(Coss.card)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Coss.inputBorder, lineWidth: 1))
-                .shadow(color: Coss.subtleShadow, radius: 1.5, y: 1)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Palette.surface)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(Palette.line, lineWidth: 1))
+                .shadow(color: .black.opacity(0.025), radius: 3, y: 1)
 
-                CossBadge(text: "\(filtered.count) 条", tone: .outline)
+                CapsulePill(text: "共 \(filtered.count) 条", accent: false)
             }
-
             if filtered.isEmpty {
-                CossCard(padding: 36) {
+                Panel(padding: 34) {
                     VStack(spacing: 10) {
-                        CossIconTile(symbol: "bookmark", size: 40)
+                        IconTile(symbol: "bookmark", size: 42)
                         Text(model.snippets.isEmpty ? "还没有保存的摘录" : "没有找到匹配的摘录")
                             .font(.system(size: 14, weight: .semibold))
                         Text(model.snippets.isEmpty
-                             ? "在任意应用拖选或双击文字，点击旁边工具栏里的「保存」，或在翻译浮窗点击书签即可记下。"
+                             ? "在任意应用选中文字，点击弹出的「保存」小圆球，或在翻译浮窗点击书签即可记下。"
                              : "试试换一个关键词搜索。")
                             .font(.system(size: 12))
-                            .foregroundStyle(Coss.mutedForeground)
+                            .foregroundStyle(Palette.secondary)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -240,14 +240,14 @@ struct SnippetsView: View {
     }
 
     private func snippetCard(_ item: Snippet) -> some View {
-        CossCardFrame(contentPadding: 16) {
+        Panel(padding: 18) {
             HStack(spacing: 8) {
                 if let app = item.appName, !app.isEmpty {
-                    CossBadge(text: app, tone: .outline)
+                    CapsulePill(text: app, accent: true)
                 }
                 Text(Self.dateFormatter.string(from: item.createdAt))
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(Coss.mutedForeground)
+                    .font(.system(size: 10.5, design: .rounded))
+                    .foregroundStyle(Palette.secondary)
                 Spacer()
                 if item.translation == nil {
                     Button {
@@ -258,7 +258,7 @@ struct SnippetsView: View {
                             Text(model.translatingSnippetID == item.id ? "翻译中…" : "补充译文")
                         }
                     }
-                    .buttonStyle(CossButtonStyle(variant: .outline, compact: true))
+                    .buttonStyle(CapsuleButton(compact: true))
                     .disabled(model.translatingSnippetID != nil)
                 }
                 Button {
@@ -270,11 +270,10 @@ struct SnippetsView: View {
                 } label: {
                     Image(systemName: ui.copiedID == item.id ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11))
-                        .foregroundStyle(ui.copiedID == item.id ? Coss.success : Coss.mutedForeground)
-                        .frame(width: 24, height: 24)
-                        .background(Coss.card)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Coss.border, lineWidth: 1))
+                        .foregroundStyle(ui.copiedID == item.id ? Palette.green : Palette.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(ui.copiedID == item.id ? Palette.mint : Palette.paper)
+                        .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .help("复制内容")
@@ -283,28 +282,28 @@ struct SnippetsView: View {
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 11))
-                        .foregroundStyle(Coss.mutedForeground)
-                        .frame(width: 24, height: 24)
-                        .background(Coss.card)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Coss.border, lineWidth: 1))
+                        .foregroundStyle(Palette.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Palette.paper)
+                        .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .help("从摘录本删除（不会修改已写入的 Markdown 文件）")
             }
-        } content: {
+            .padding(.bottom, 10)
+
             Text(item.text)
                 .font(.system(size: 13.5))
-                .foregroundStyle(Coss.foreground)
+                .foregroundStyle(Palette.ink)
                 .lineSpacing(4)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
 
             if let translation = item.translation, !translation.isEmpty {
-                Rectangle().fill(Coss.border).frame(height: 1).padding(.vertical, 10)
+                Rectangle().fill(Palette.line).frame(height: 1).padding(.vertical, 10)
                 Text(translation)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Coss.mutedForeground)
+                    .foregroundStyle(Palette.green)
                     .lineSpacing(4)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

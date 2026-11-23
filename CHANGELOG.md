@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3
+
+- Restore the warm-paper & forest-green capsule aesthetic across the entire app: frosted-glass `Capsule()` hover subtitle, warm frosted translation card with circular tools and capsule language/action buttons, capsule navigation & controls in the main window and Snippets view, and frosted-glass + forest-green staggered circular selection orbs (`译` / `复制` / `保存`) with capsule hover labels.
+- Fix hover translation reliability in both in-app preview and external apps: replace fragile `NSTrackingArea` in `HomeView`'s `HoverSampleSensor` with zero-idle-CPU local `mouseMoved` tracking, clear Vision's `minimumTextHeight` filter so small 1x-display text is always detected, expand the hover OCR crop to `1100 × 420`, prevent localized `AXDescription`/`AXHelp` tooltips from suppressing OCR on foreign visual text, and ignore the subtitle window in `topWindowIsOurs`.
+
 ## 0.6.2
 
 - Redesign the floating selection UI into three minimalist `coss.com/ui`-styled circular orbs (`译` / `复制` / `保存`) that pop in one by one with staggered spring animations and hover micro-labels instead of an edit bar.

@@ -289,8 +289,8 @@ final class AppModel: ObservableObject {
         var buttonCount = 4 // save, pin, copy, close
         if method == "截图 OCR" { buttonCount += 1 }
         if canToggleRegionMerge { buttonCount += 1 }
-        let buttonsWidth = CGFloat(buttonCount * 23)
-        let headerMinimum = max(CardLayout.minimumWidth, ceil(14 + 17 + 18 + labelWidth + 24 + buttonsWidth + 8))
+        let buttonsWidth = CGFloat(buttonCount * 24)
+        let headerMinimum = max(CardLayout.minimumWidth, ceil(14 + 18 + 18 + labelWidth + 54 + buttonsWidth + 8))
         return CardLayout.width(source: source, result: phase == .result ? result : "", minimumWidth: headerMinimum)
     }
     var cardSourceHeight: CGFloat { CardLayout.sourceHeight(source: source, width: cardWidth) }

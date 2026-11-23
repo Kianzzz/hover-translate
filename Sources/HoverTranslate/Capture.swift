@@ -272,18 +272,23 @@ enum TextCapture {
                         let role = attribute(element, kAXRoleAttribute) as? String ?? ""
                         if role == "AXWindow" || role == "AXApplication" { break }
                         let valueText = attribute(element, kAXValueAttribute) as? String
-                        let candidates: [(String?, Bool)] = [
-                            (valueText, true),
-                            (attribute(element, kAXTitleAttribute) as? String, false),
-                            (attribute(element, kAXDescriptionAttribute) as? String, false),
-                            (attribute(element, kAXHelpAttribute) as? String, false)
+                        let titleText = attribute(element, kAXTitleAttribute) as? String
+                        let descText = attribute(element, kAXDescriptionAttribute) as? String
+                        let helpText = attribute(element, kAXHelpAttribute) as? String
+                        // Track source kind: 0 = AXValue, 1 = AXTitle, 2 = AXDescription/AXHelp (often localized UI labels).
+                        let candidates: [(String?, Int)] = [
+                            (valueText, 0),
+                            (titleText, 1),
+                            (descText, 2),
+                            (helpText, 2)
                         ]
-                        guard let matched = candidates.compactMap({ text, isValue in
-                            guard let text, !TextLogic.clean(text).isEmpty else { return nil as (String, Bool)? }
-                            return (text, isValue)
+                        guard let matched = candidates.compactMap({ text, kind in
+                            guard let text, !TextLogic.clean(text).isEmpty else { return nil as (String, Int)? }
+                            return (text, kind)
                         }).first else { continue }
                         let raw = matched.0
-                        let fromValue = matched.1
+                        let sourceKind = matched.1
+                        let fromValue = sourceKind == 0
                         let text = TextLogic.clean(raw)
                         guard let rect = bounds(element), rect.insetBy(dx: -4, dy: -4).contains(point) else { continue }
                         // kAXRangeForPositionParameterizedAttribute indexes into AXValue, never AXTitle/AXDescription.
@@ -314,7 +319,7 @@ enum TextCapture {
                                 // Preserve complete static paragraphs when AX exposes no character
                                 // position; controls keep their own labels as before.
                                 if fallback == nil {
-                                    let container = ["AXRow", "AXCell", "AXImage"].contains(role)
+                                    let container = ["AXRow", "AXCell", "AXImage"].contains(role) || sourceKind == 2
                                     fallback = CapturedText(text: text, bounds: rect, method: "系统取词 · 文字块 / 控件",
                                                             needsLineCheck: index > 0 || container || rect.height > 40,
                                                             isContainer: index > 0 || container)
@@ -337,7 +342,7 @@ enum TextCapture {
         var count: UInt32 = 0
         guard CGGetDisplaysWithPoint(point, 1, &displayID, &count) == .success, count > 0 else { return nil }
         let display = CGDisplayBounds(displayID)
-        let width = min(960, display.width), height = min(320, display.height)
+        let width = min(1100, display.width), height = min(420, display.height)
         let crop = CGRect(x: min(max(point.x - width / 2, display.minX), display.maxX - width),
                           y: min(max(point.y - height / 2, display.minY), display.maxY - height),
                           width: width, height: height)
@@ -373,7 +378,7 @@ enum TextCapture {
                         request.setComputeDevice(cpu, for: .main)
                     }
                     request.recognitionLanguages = TextCapture.ocrLanguages
-                    request.minimumTextHeight = Float(min(0.02, 6 / max(1, crop.height)))
+                    request.minimumTextHeight = 0
                     request.recognitionLevel = accurate ? .accurate : .fast
                     request.automaticallyDetectsLanguage = accurate
                     if accurate { request.recognitionLanguages = try accurateLanguages(request) }

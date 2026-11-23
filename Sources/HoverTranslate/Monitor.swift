@@ -1,5 +1,8 @@
 import AppKit
 import Combine
+import os
+
+private let hoverLog = Logger(subsystem: "io.github.kianzzz.hovertranslate", category: "hover")
 
 @MainActor
 final class HoverMonitor {
@@ -22,6 +25,7 @@ final class HoverMonitor {
     let model: AppModel
     var visibleCardFrame: (() -> CGRect?)?
     var visibleToolbarFrame: (() -> CGRect?)?
+    var subtitleWindowNumber: (() -> Int?)?
     private var candidate: Candidate?
     private var toolbarState: SelectionToolbarState?
     private var outsideSince: Date?
@@ -488,7 +492,16 @@ final class HoverMonitor {
                     else if let line = try? await TextCapture.ocr(at: quartz, word: word) { capture = line }
                 }
                 guard !Task.isCancelled, token == revision, model.enabled, !model.pinned,
-                      let capture, TextLogic.isForeign(capture.text, native: native, japaneseKanji: model.japaneseKanji) else { return }
+                      let capture else {
+                    hoverLog.debug("hover: no capture (cancelled=\(Task.isCancelled), revMatch=\(token == self.revision))")
+                    return
+                }
+                let foreign = TextLogic.isForeign(capture.text, native: native, japaneseKanji: model.japaneseKanji)
+                guard foreign else {
+                    hoverLog.debug("hover: skipped non-foreign (\(capture.method), len=\(capture.text.count))")
+                    return
+                }
+                hoverLog.debug("hover: staging (\(capture.method), len=\(capture.text.count))")
                 stage(capture, sourceRect: TextLogic.cocoaRect(capture.bounds, desktopTop: desktopTop), pointer: point)
             } catch {
                 guard !Task.isCancelled, token == revision else { return }
@@ -534,7 +547,9 @@ final class HoverMonitor {
 
     private func topWindowIsOurs(at quartz: CGPoint) -> Bool {
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+        let subtitleNum = subtitleWindowNumber?()
         for window in windows {
+            if let subtitleNum, let num = window[kCGWindowNumber as String] as? Int, num == subtitleNum { continue }
             guard (window[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let raw = window[kCGWindowBounds as String] as? [String: Any],
                   let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), rect.contains(quartz) else { continue }
