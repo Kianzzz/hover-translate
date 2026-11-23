@@ -70,7 +70,7 @@ struct MainView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.1"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.2"
     }
 
     private var sidebar: some View {
@@ -214,7 +214,7 @@ struct HomeView: View {
                 browserPreview
                 VStack(alignment: .leading, spacing: 18) {
                     step("1", "悬停外语", "停留片刻显示一行译文；\(TextLogic.displayName(model.nativeLanguage))文字不打扰。")
-                    step("2", "划词工具栏", "拖选或双击出现「翻译 / 复制 / 保存」图标，也可按 ⌃⌥T 直接翻译。")
+                    step("2", "划词圆球", "拖选或双击依次弹出「译 / 复制 / 保存」小圆球，也可按 ⌃⌥T 直接翻译。")
                     step("3", "截图翻译 ⌥S", "全局按 ⌥S 框选任意区域，自动合段识别并翻译。")
                     Spacer(minLength: 0)
                     Button { model.startScreenshot?() } label: {
@@ -354,7 +354,7 @@ private struct PreviewHover: ViewModifier {
 
     func body(content: Content) -> some View {
         content.textSelection(.enabled)
-            .background(HoverSampleSensor { inside, rect in
+            .overlay(HoverSampleSensor { inside, rect in
                 interaction.task?.cancel()
                 if inside {
                     interaction.task = Task { @MainActor in
@@ -388,7 +388,7 @@ struct HoverSampleSensor: NSViewRepresentable {
             if let area { removeTrackingArea(area) }
             let tracking = NSTrackingArea(
                 rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
                 owner: self,
                 userInfo: nil
             )
@@ -402,6 +402,12 @@ struct HoverSampleSensor: NSViewRepresentable {
         }
 
         override func mouseEntered(with event: NSEvent) {
+            guard NSEvent.pressedMouseButtons == 0 else { return }
+            inside = true
+            changed?(true, screenRect)
+        }
+
+        override func mouseMoved(with event: NSEvent) {
             guard !inside, NSEvent.pressedMouseButtons == 0 else { return }
             inside = true
             changed?(true, screenRect)
@@ -586,7 +592,7 @@ struct SettingsView: View {
             } content: {
                 toggleRow("cursorarrow.rays", "悬停翻译", "停留后在原文下显示一行译文。", $model.hoverEnabled)
                 divider
-                toggleRow("text.cursor", "划词快捷工具栏", "选中文字后在旁显示「翻译 / 复制 / 保存」图标。", $model.selectionToolbarEnabled)
+                toggleRow("text.cursor", "划词快捷圆球", "选中文字后依次弹出「译 / 复制 / 保存」三个小圆球。", $model.selectionToolbarEnabled)
                 divider
                 toggleRow("text.viewfinder", "允许本机 OCR 补充识别", "需要屏幕录制权限；识别范围限于鼠标附近。", $model.ocrEnabled)
                 divider

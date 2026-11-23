@@ -68,7 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.subtitle.orderOut(nil)
         }
         model.showSelectionToolbar = { [weak self] anchor in self?.showSelectionToolbar(anchor) }
-        model.hideSelectionToolbar = { [weak self] in self?.selectionToolbar.orderOut(nil) }
+        model.hideSelectionToolbar = { [weak self] in
+            self?.model.toolbarShown = false
+            self?.selectionToolbar.orderOut(nil)
+        }
         model.toolbarActionTranslate = { [weak self] in self?.monitor.performToolbarAction(.translate) }
         model.toolbarActionCopy = { [weak self] in self?.monitor.performToolbarAction(.copy) }
         model.toolbarActionSave = { [weak self] in self?.monitor.performToolbarAction(.save) }
@@ -215,47 +218,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func createSelectionToolbar() {
-        let size = CGSize(width: 212, height: 36)
+        let size = CGSize(width: 136, height: 64)
         selectionToolbar = SelectionToolbarPanel(
             contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        selectionToolbar.title = "浮译 · 划词工具栏"
+        selectionToolbar.title = "浮译 · 划词快捷圆球"
         selectionToolbar.setAccessibilityRole(.window)
-        selectionToolbar.setAccessibilityLabel("划词工具栏")
+        selectionToolbar.setAccessibilityLabel("划词快捷圆球")
         selectionToolbar.isOpaque = false
         selectionToolbar.backgroundColor = .clear
-        selectionToolbar.hasShadow = true
+        selectionToolbar.hasShadow = false
+        selectionToolbar.acceptsMouseMovedEvents = true
         selectionToolbar.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)
         selectionToolbar.hidesOnDeactivate = false
         selectionToolbar.isReleasedWhenClosed = false
         selectionToolbar.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        let glass = NSVisualEffectView(frame: CGRect(origin: .zero, size: size))
-        glass.material = .popover
-        glass.blendingMode = .behindWindow
-        glass.state = .active
-        glass.wantsLayer = true
-        glass.layer?.cornerRadius = 11
-        glass.layer?.masksToBounds = true
         let hosting = FirstMouseHostingView(rootView: SelectionToolbarView(model: model))
         hosting.sizingOptions = []
-        hosting.frame = glass.bounds
+        hosting.frame = CGRect(origin: .zero, size: size)
         hosting.autoresizingMask = [.width, .height]
-        glass.addSubview(hosting)
-        selectionToolbar.contentView = glass
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = NSColor.clear.cgColor
+        selectionToolbar.contentView = hosting
     }
 
     func showSelectionToolbar(_ anchor: CGRect) {
-        let size = CGSize(width: 212, height: 36)
+        let size = CGSize(width: 136, height: 64)
         guard let screen = screen(containing: anchor.origin) else { return }
-        let safe = screen.visibleFrame.insetBy(dx: 10, dy: 10)
+        let safe = screen.visibleFrame.insetBy(dx: 8, dy: 8)
         let x = min(max(anchor.midX - size.width / 2, safe.minX), safe.maxX - size.width)
-        var y = anchor.maxY + 12
-        if y + size.height > safe.maxY { y = anchor.minY - size.height - 12 }
+        var y = anchor.maxY + 2
+        if y + size.height > safe.maxY { y = anchor.minY - size.height + 10 }
         y = min(max(y, safe.minY), safe.maxY - size.height)
         selectionToolbar.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        model.toolbarShown = true
+        model.toolbarAppearance &+= 1
         selectionToolbar.orderFrontRegardless()
     }
 
@@ -517,6 +517,12 @@ struct Entry {
                 monitor.stage(CapturedText(text: "Test", bounds: .zero, method: "test"), sourceRect: source, pointer: pointer, demo: true)
                 DiagnosticCheck.require(opened == 1 && monitor.retainCandidate(at: pointer), "Hover translates immediately after dwell")
                 DiagnosticCheck.require(!monitor.retainCandidate(at: .zero), "Leaving the source dismisses the subtitle")
+                // Single-character AX bounds must still retain nearby movement along the hovered word.
+                let tinyChar = CGRect(x: pointer.x - 3, y: pointer.y - 7, width: 7, height: 14)
+                monitor.stage(CapturedText(text: "Hello world", bounds: .zero, method: "test"), sourceRect: tinyChar, pointer: pointer, demo: true)
+                DiagnosticCheck.require(monitor.retainCandidate(at: CGPoint(x: pointer.x + 14, y: pointer.y)), "Tiny character bounds keep a comfortable hover zone")
+                monitor.clearCandidate()
+                DiagnosticCheck.require(!model.toolbarShown, "Selection orbs start hidden")
                 monitor.visibleCardFrame = { source }
                 let destination = ReplacementTarget(element: AXUIElementCreateApplication(1), pid: 1,
                     edit: SelectionEdit(value: "你好，世界！", selected: "你好，世界！", range: NSRange(location: 0, length: 6)))

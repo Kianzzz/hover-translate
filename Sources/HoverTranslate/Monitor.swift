@@ -253,18 +253,22 @@ final class HoverMonitor {
                   self.model.enabled, self.model.selectionToolbarEnabled,
                   !self.model.pinned, !self.model.capturingRegion else { return }
             guard let front = NSWorkspace.shared.frontmostApplication,
-                  front.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+                  front.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+                self.attempted = false; self.stableSince = Date(); return
+            }
             let pid = front.processIdentifier
             let quartz = TextLogic.quartzPoint(pointer, desktopTop: self.desktopTop)
             let context = TextCapture.selectionContext(at: quartz, pid: pid)
-            guard context.allowed, !context.protected else { return }
+            guard context.allowed, !context.protected else {
+                self.attempted = false; self.stableSince = Date(); return
+            }
 
             var preloaded: SelectedCapture?
             if self.model.accessibility {
                 do {
                     preloaded = try await TextCapture.selected(pid: pid, fallbackPoint: quartz, timeout: 0.12)
                 } catch CaptureError.protectedText {
-                    return
+                    self.attempted = false; self.stableSince = Date(); return
                 } catch {
                     preloaded = nil
                 }
@@ -344,9 +348,15 @@ final class HoverMonitor {
     func stage(_ capture: CapturedText, sourceRect: CGRect, pointer: CGPoint, demo: Bool = false) {
         guard !model.pinned else { return }
         clearToolbar()
-        let vicinity = CGRect(x: pointer.x - 24, y: pointer.y - 8, width: 48, height: 16)
-        let region = sourceRect.contains(pointer) && (demo || sourceRect.height <= 44) ? sourceRect : vicinity
-        candidate = Candidate(region: region.insetBy(dx: -3, dy: -2), demo: demo)
+        // Ensure single-character AX bounds still provide a comfortable hover zone.
+        let vicinity = CGRect(x: pointer.x - 32, y: pointer.y - 12, width: 64, height: 24)
+        let region: CGRect
+        if sourceRect.contains(pointer) && (demo || sourceRect.height <= 44) {
+            region = sourceRect.width < 64 || sourceRect.height < 22 ? sourceRect.union(vicinity) : sourceRect
+        } else {
+            region = vicinity
+        }
+        candidate = Candidate(region: region.insetBy(dx: -4, dy: -3), demo: demo)
         outsideSince = nil
         startPolling()
         model.present(capture, cocoaAnchor: CGRect(x: pointer.x, y: region.minY, width: 1, height: region.height), selection: false)
@@ -354,6 +364,7 @@ final class HoverMonitor {
 
     private func resetMotion(at point: CGPoint) {
         captureTask?.cancel()
+        captureTask = nil
         revision += 1
         lastPoint = point
         stableSince = Date()
@@ -378,11 +389,11 @@ final class HoverMonitor {
 
     private func retainToolbar(at point: CGPoint, now: Date) -> Bool {
         guard let state = toolbarState else { return false }
-        if let frame = visibleToolbarFrame?(), frame.insetBy(dx: -16, dy: -16).contains(point) {
+        if let frame = visibleToolbarFrame?(), frame.insetBy(dx: -20, dy: -20).contains(point) {
             return true
         }
         let distance = hypot(point.x - state.pointer.x, point.y - state.pointer.y)
-        if distance <= 200 && now.timeIntervalSince(state.createdAt) < 6 {
+        if distance <= 96 && now.timeIntervalSince(state.createdAt) < 3.5 {
             return true
         }
         clearToolbar()
@@ -440,7 +451,9 @@ final class HoverMonitor {
         if retainCandidate(at: point, now: now) { return }
         guard model.enabled, !model.pinned else { return }
         if let frame = visibleCardFrame?(), frame.insetBy(dx: -12, dy: -12).contains(point) { return }
-        let moved = hypot(point.x - lastPoint.x, point.y - lastPoint.y) > 3
+        // Tolerate tiny involuntary cursor jitter while an async AX/OCR capture is in flight.
+        let jitterLimit: CGFloat = captureTask != nil ? 6 : 3.5
+        let moved = hypot(point.x - lastPoint.x, point.y - lastPoint.y) > jitterLimit
         if moved || NSEvent.pressedMouseButtons != 0 {
             resetMotion(at: point)
             if model.isPresenting || candidate != nil { model.dismiss() }
@@ -455,6 +468,7 @@ final class HoverMonitor {
         let word = model.wordMode
         captureTask = Task { [weak self] in
             guard let self else { return }
+            defer { if self.revision == token { self.captureTask = nil } }
             do {
                 var capture: CapturedText?
                 if model.accessibility { capture = try await TextCapture.accessible(at: quartz, word: word) }

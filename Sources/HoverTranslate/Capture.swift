@@ -337,7 +337,7 @@ enum TextCapture {
         var count: UInt32 = 0
         guard CGGetDisplaysWithPoint(point, 1, &displayID, &count) == .success, count > 0 else { return nil }
         let display = CGDisplayBounds(displayID)
-        let width = min(1400, display.width), height = min(720, display.height)
+        let width = min(960, display.width), height = min(320, display.height)
         let crop = CGRect(x: min(max(point.x - width / 2, display.minX), display.maxX - width),
                           y: min(max(point.y - height / 2, display.minY), display.maxY - height),
                           width: width, height: height)
@@ -397,9 +397,9 @@ enum TextCapture {
                     let originalHit = hitEntry.offset
                     var hit = hitEntry.element
                     var hitRegion = crop
-                    // Re-read just this line when fast mode or short/low-confidence labels
+                    // Re-read just this line when fast mode or low-confidence labels
                     // might have dropped an edge character next to a UI icon.
-                    let needsRefinement = !accurate || hit.0.count <= 24 || hit.2.confidence < 0.75
+                    let needsRefinement = !accurate || hit.2.confidence < 0.55
                     let lineRegion = hit.1.insetBy(dx: -max(32, hit.1.height * 1.25), dy: -12).intersection(crop)
                     let scaleX = CGFloat(image.width) / crop.width
                     let scaleY = CGFloat(image.height) / crop.height
@@ -428,14 +428,14 @@ enum TextCapture {
                             let box = CGRect(x: refinedRegion.minX + b.minX * refinedRegion.width,
                                              y: refinedRegion.minY + (1 - b.maxY) * refinedRegion.height,
                                              width: b.width * refinedRegion.width, height: b.height * refinedRegion.height)
-                            return box.insetBy(dx: -4, dy: -4).contains(point) ? (text.string, box, text) : nil
+                            return box.insetBy(dx: -8, dy: -6).contains(point) ? (text.string, box, text) : nil
                         }
                         if let refined = refinements.min(by: { abs($0.1.midY - point.y) < abs($1.1.midY - point.y) }) {
                             hit = refined
                             hitRegion = refinedRegion
                         }
                     }
-                    guard hit.1.insetBy(dx: -4, dy: -4).contains(point) else {
+                    guard hit.1.insetBy(dx: -8, dy: -6).contains(point) else {
                         continuation.resume(returning: nil); return
                     }
                     if word {

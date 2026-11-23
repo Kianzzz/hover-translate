@@ -147,6 +147,8 @@ final class AppModel: ObservableObject {
     @Published var regionMergeLines = true
     @Published var recognizingRegion = false
     @Published var toastMessage = ""
+    @Published var toolbarShown = false
+    @Published var toolbarAppearance = 0
     @Published var snippets: [Snippet] = []
     @Published var snippetsMarkdownPath = SnippetStore.defaultMarkdownURL.path {
         didSet { defaults?.set(snippetsMarkdownPath, forKey: "snippetsMarkdownPath") }

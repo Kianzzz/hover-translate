@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2
+
+- Redesign the floating selection UI into three minimalist `coss.com/ui`-styled circular orbs (`译` / `复制` / `保存`) that pop in one by one with staggered spring animations and hover micro-labels instead of an edit bar.
+- Restore fast, reliable hover translation across external apps and the in-app preview: shrink the hover OCR crop to `960 × 320` (~3.3× faster Vision recognition), avoid redundant second-pass OCR model reloads on high-confidence hits, relax 1x-display line hit margins, tolerate minor pointer jitter while capture is in flight, expand tiny single-character AX hover zones, tighten the selection-orb retention radius so nearby hovers are never blocked for 6 seconds, and make `HomeView`'s `HoverSampleSensor` work in inactive windows and after text selection.
+
 ## 0.6.1
 
 - Fix selection toolbar not appearing on multi-window / cross-window selections by tracking the exact `CGWindowID` under the pointer instead of comparing frontmost app window frames, relaxing false AX PID/role rejections, adding a trackpad/mouse-state drag fallback, and supporting local text selection inside Hover Translate itself.

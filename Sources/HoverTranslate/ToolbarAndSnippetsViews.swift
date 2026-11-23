@@ -2,67 +2,134 @@ import SwiftUI
 import AppKit
 
 @MainActor
-private final class ToolbarHoverState: ObservableObject {
+private final class ToolbarOrbState: ObservableObject {
     @Published var hovered: String?
+    @Published var revealed: [Bool] = [false, false, false]
+    private var sequenceTask: Task<Void, Never>?
+
+    func playPopIn() {
+        sequenceTask?.cancel()
+        hovered = nil
+        revealed = [false, false, false]
+        sequenceTask = Task { @MainActor [weak self] in
+            let delays: [UInt64] = [15_000_000, 65_000_000, 65_000_000]
+            for (index, delay) in delays.enumerated() {
+                try? await Task.sleep(nanoseconds: delay)
+                guard let self, !Task.isCancelled else { return }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.66)) {
+                    self.revealed[index] = true
+                }
+            }
+        }
+    }
+
+    func reset() {
+        sequenceTask?.cancel()
+        sequenceTask = nil
+        hovered = nil
+        revealed = [false, false, false]
+    }
 }
 
-/// Coss UI floating Toolbar: crisp neutral popover, 1px hairline border,
-/// 4pt inset padding, and vertical toolbar separators.
+/// Three refined minimalist circular orbs in coss.com/ui style that pop in
+/// sequentially beside selected text: Translate, Copy, and Save.
 struct SelectionToolbarView: View {
     @ObservedObject var model: AppModel
-    @StateObject private var ui = ToolbarHoverState()
+    @StateObject private var ui = ToolbarOrbState()
 
     var body: some View {
-        HStack(spacing: 2) {
-            actionButton(id: "translate", symbol: "character.bubble", title: "翻译", primary: true) {
+        HStack(spacing: 10) {
+            orb(index: 0, id: "translate", title: "翻译") {
+                Text("译")
+                    .font(.system(size: 11.5, weight: .semibold))
+            } action: {
                 model.toolbarActionTranslate?()
             }
-            divider
-            actionButton(id: "copy", symbol: "doc.on.doc", title: "复制", primary: false) {
+            orb(index: 1, id: "copy", title: "复制") {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 10.5, weight: .medium))
+            } action: {
                 model.toolbarActionCopy?()
             }
-            divider
-            actionButton(id: "save", symbol: "bookmark", title: "保存", primary: false) {
+            orb(index: 2, id: "save", title: "保存") {
+                Image(systemName: "bookmark")
+                    .font(.system(size: 10.5, weight: .medium))
+            } action: {
                 model.toolbarActionSave?()
             }
         }
-        .padding(4)
-        .frame(width: 212, height: 36)
-        .background(Coss.popover)
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(Coss.border, lineWidth: 1)
-        )
+        .padding(.bottom, 12)
+        .frame(width: 136, height: 64, alignment: .bottom)
+        .background(Color.clear)
+        .onAppear {
+            if model.toolbarShown { ui.playPopIn() }
+        }
+        .onChange(of: model.toolbarAppearance) { _, _ in
+            if model.toolbarShown { ui.playPopIn() }
+        }
+        .onChange(of: model.toolbarShown) { _, shown in
+            if !shown { ui.reset() }
+        }
     }
 
-    private var divider: some View {
-        Rectangle()
-            .fill(Coss.border)
-            .frame(width: 1, height: 14)
-    }
+    private func orb<Icon: View>(
+        index: Int,
+        id: String,
+        title: String,
+        @ViewBuilder icon: () -> Icon,
+        action: @escaping () -> Void
+    ) -> some View {
+        let shown = ui.revealed.indices.contains(index) ? ui.revealed[index] : false
+        let isHovered = shown && ui.hovered == id
 
-    private func actionButton(id: String, symbol: String, title: String, primary: Bool, action: @escaping () -> Void) -> some View {
-        let isHovered = ui.hovered == id
         return Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .medium))
-                Text(title)
-                    .font(.system(size: 11.5, weight: primary ? .semibold : .medium))
+            ZStack {
+                Circle()
+                    .fill(isHovered ? Coss.primary : Coss.popover)
+                Circle()
+                    .stroke(isHovered ? Coss.primary : Coss.inputBorder, lineWidth: 1)
+                if !isHovered {
+                    Circle()
+                        .stroke(Coss.innerHighlight, lineWidth: 0.5)
+                        .padding(0.75)
+                }
+                icon()
+                    .foregroundStyle(isHovered ? Coss.primaryForeground : Coss.foreground)
             }
-            .foregroundStyle(primary && isHovered ? Coss.primaryForeground : Coss.foreground)
-            .frame(maxWidth: .infinity, maxHeight: 28)
-            .background(
-                primary
-                    ? (isHovered ? Coss.primary : Coss.muted)
-                    : (isHovered ? Coss.accent : Color.clear)
+            .frame(width: 28, height: 28)
+            .shadow(
+                color: Color.black.opacity(isHovered ? 0.22 : 0.14),
+                radius: isHovered ? 7 : 4.5,
+                x: 0,
+                y: isHovered ? 3 : 2
             )
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .contentShape(Rectangle())
+            .contentShape(Circle())
+            .overlay(alignment: .top) {
+                if isHovered {
+                    Text(title)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Coss.primaryForeground)
+                        .fixedSize()
+                        .padding(.horizontal, 6.5)
+                        .padding(.vertical, 2)
+                        .background(Coss.primary)
+                        .clipShape(Capsule())
+                        .shadow(color: Color.black.opacity(0.16), radius: 4, y: 1.5)
+                        .offset(y: -23)
+                        .allowsHitTesting(false)
+                        .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .bottom)))
+                }
+            }
         }
         .buttonStyle(.plain)
-        .onHover { hovering in ui.hovered = hovering ? id : (ui.hovered == id ? nil : ui.hovered) }
+        .scaleEffect(shown ? (isHovered ? 1.12 : 1.0) : 0.32)
+        .opacity(shown ? 1 : 0)
+        .offset(y: shown ? (isHovered ? -2 : 0) : 10)
+        .allowsHitTesting(shown)
+        .animation(.spring(response: 0.22, dampingFraction: 0.74), value: isHovered)
+        .onHover { hovering in
+            ui.hovered = hovering ? id : (ui.hovered == id ? nil : ui.hovered)
+        }
         .accessibilityLabel(title)
     }
 }
